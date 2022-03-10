@@ -16,20 +16,12 @@ A enhanced state management of Bloc
 ```dart
 // create a cubix
 class CounterCubix extends Cubix<int> {
-    // init cubix with state 0
     CounterCubix(): super(0);
-
-    // methods
-    void increment() {
-        // change state
-        emit(state + 1);
-    }
-
-    void decrement() {
-        // change state
-        emit(state - 1);
-    }
+    void increment() => emit(state + 1);
+    void decrement() => emit(state - 1);
 }
+
+void main() => runApp(App());
 
 class App extends StatelessWidget {
     @override
@@ -64,14 +56,8 @@ class App extends StatelessWidget {
 ```dart
 class CounterCubix extends Cubix<int> {
     CounterCubix(): super(0);
-
-    void increment() {
-        emit(state + 1);
-    }
-
-    void decrement() {
-        emit(state - 1);
-    }
+    void increment() => emit(state + 1);
+    void decrement() => emit(state - 1);
 }
 
 class DoubleCounterCubix extends Cubix<int> {
@@ -85,7 +71,7 @@ class DoubleCounterCubix extends Cubix<int> {
         // call enableSync to allow this cubix updates whenever its dependency cubixes are updated
         // if you want to debouce an update, just call enableSync(debounce: Duration(seconds: 1))
         context.enableSync();
-        counterCubix = context.from(CounterCubix.new);
+        counterCubix = context.fromCreator(CounterCubix.new);
     }
 
     @override

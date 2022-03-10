@@ -252,14 +252,14 @@ class CreateContext {
     _sync = _SyncConfigs(debounce: debounce);
   }
 
-  T from<T extends Cubix>(CreateCubix<T> create) {
-    final cubix = _resolver.resolve(create: create);
+  T fromContext<T extends Cubix>(ResolveCubix<T> resolve, {Object? family}) {
+    final cubix = _resolver.resolve(resolve: resolve, family: family);
     dependencies.add(cubix);
     return cubix;
   }
 
-  T resolve<T extends Cubix>(ResolveCubix<T> resolve) {
-    final cubix = _resolver.resolve(resolve: resolve);
+  T fromCreator<T extends Cubix>(CreateCubix<T> create, {Object? family}) {
+    final cubix = _resolver.resolve(create: create, family: family);
     dependencies.add(cubix);
     return cubix;
   }
@@ -337,18 +337,21 @@ abstract class Cubix<T> extends Cubit<T> {
 }
 
 class CubixBuilder<TCubix extends Cubix> extends StatefulWidget {
+  final bool Function(Object? prev, Object? next)? buildWhen;
   final CreateCubix<TCubix>? create;
   final Object? family;
   final ResolveCubix<TCubix>? resolve;
   final Widget Function(BuildContext context, TCubix cubix) builder;
   final bool transient;
 
-  /// @transient: remove cubix automatically when the widget is disposed
   const CubixBuilder({
     Key? key,
     this.create,
     this.resolve,
     this.family,
+    this.buildWhen,
+
+    /// remove cubix automatically when the widget is disposed
     this.transient = false,
     required this.builder,
   }) : super(key: key);
@@ -365,16 +368,87 @@ class CubixBuilderState<TCubix extends Cubix>
 
   @override
   Widget build(BuildContext context) {
-    final resolver = context.read<DependencyResolver>();
-    cubix = resolver.resolve(
+    final resolver = RepositoryProvider.of<DependencyResolver>(context);
+    final nextCubix = resolver.resolve(
       create: widget.create,
       resolve: widget.resolve,
       family: widget.family,
     );
 
+    if (cubix != nextCubix && widget.transient) {
+      cubix?.dispose();
+    }
+
+    cubix = nextCubix;
+
     return BlocBuilder(
       bloc: cubix,
+      buildWhen: widget.buildWhen,
       builder: (_, __) => widget.builder(context, cubix!),
+    );
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
+    if (widget.transient && cubix != null) {
+      cubix?._remove();
+    }
+  }
+}
+
+class CubixListener<TCubix extends Cubix> extends StatefulWidget {
+  final void Function(BuildContext context, TCubix cubix) listener;
+  final bool Function(Object? prev, Object? next)? listenWhen;
+  final CreateCubix<TCubix>? create;
+  final Object? family;
+  final ResolveCubix<TCubix>? resolve;
+  final Widget child;
+  final bool transient;
+
+  const CubixListener({
+    Key? key,
+    this.create,
+    this.resolve,
+    this.family,
+    this.listenWhen,
+
+    /// remove cubix automatically when the widget is disposed
+    this.transient = false,
+    required this.listener,
+    required this.child,
+  }) : super(key: key);
+
+  @override
+  State<StatefulWidget> createState() {
+    return CubixListenerState<TCubix>();
+  }
+}
+
+class CubixListenerState<TCubix extends Cubix>
+    extends State<CubixListener<TCubix>> {
+  TCubix? cubix;
+
+  @override
+  Widget build(BuildContext context) {
+    final resolver = RepositoryProvider.of<DependencyResolver>(context);
+    final nextCubix = resolver.resolve(
+      create: widget.create,
+      resolve: widget.resolve,
+      family: widget.family,
+    );
+
+    if (cubix != nextCubix && widget.transient) {
+      cubix?.dispose();
+    }
+
+    cubix = nextCubix;
+
+    return BlocListener(
+      bloc: cubix,
+      listener: (context, _) => widget.listener(context, cubix!),
+      listenWhen: widget.listenWhen,
+      child: widget.child,
     );
   }
 
@@ -394,26 +468,26 @@ class CubixProvider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return BlocProvider(
+    return RepositoryProvider(
       create: (context) => DependencyResolver(context),
       child: child,
     );
   }
 }
 
-class DependencyResolver extends Cubit<Object?> {
+class DependencyResolver {
   final _dependencies = <Type, Map<Object?, Cubix>>{};
   final BuildContext context;
 
-  DependencyResolver(this.context) : super(null);
+  DependencyResolver(this.context);
 
   void add<T extends Cubix>(T dependency, [Object? family]) {
-    final collection = _getCollection(T);
+    final collection = _collection(T);
     collection[family] = dependency;
   }
 
   void remove<TCubix extends Cubix>(TCubix cubix) {
-    final collection = _getCollection(cubix._resolvedType);
+    final collection = _collection(cubix._resolvedType);
     collection.remove(cubix._key);
     cubix.dispose();
   }
@@ -423,7 +497,7 @@ class DependencyResolver extends Cubit<Object?> {
     CreateCubix<T>? create,
     Object? family,
   }) {
-    var collection = _getCollection(T);
+    var collection = _collection(T);
     var obj = collection[family] as T?;
     if (obj != null) return obj;
     obj = create != null
@@ -436,7 +510,7 @@ class DependencyResolver extends Cubit<Object?> {
     return obj;
   }
 
-  Map<Object?, Cubix> _getCollection(Type type) {
+  Map<Object?, Cubix> _collection(Type type) {
     var collection = _dependencies[type];
     if (collection == null) {
       collection = {};
@@ -467,24 +541,79 @@ class _SyncConfigs {
 
 extension BuildContextExtension on BuildContext {
   /// get cubix that matches type T
-  T cubix<T extends Cubix>(CreateCubix<T> create, [Object? family]) {
-    return read<DependencyResolver>().resolve(create: create, family: family);
+  T cubix<T extends Cubix>(CreateCubix<T> create, {Object? family}) {
+    return RepositoryProvider.of<DependencyResolver>(this).resolve(
+      create: create,
+      family: family,
+    );
   }
 }
 
-extension CubixFactoryExtension<T extends Cubix> on T Function() {
+extension CubixFactoryExtension<TCubit extends Cubix> on TCubit Function() {
   /// build a widget with specified T cubix
-
   Widget build(
-    Widget Function(BuildContext context, T cubix) builder, {
+    Widget Function(BuildContext context, TCubit cubix) builder, {
     Object? family,
 
     /// remove cubix automatically when the widget is disposed
     bool transient = false,
   }) {
-    return CubixBuilder<T>(
+    return CubixBuilder<TCubit>(
       create: this,
       builder: builder,
+      family: family,
+      transient: transient,
+    );
+  }
+
+  Widget buildWhen<TState>(
+    bool Function(TState prev, TState next) condition,
+    Widget Function(BuildContext context, TCubit cubix) builder, {
+    Object? family,
+
+    /// remove cubix automatically when the widget is disposed
+    bool transient = false,
+  }) {
+    return CubixBuilder<TCubit>(
+      create: this,
+      buildWhen: (prev, next) => condition(prev as TState, next as TState),
+      builder: builder,
+      family: family,
+      transient: transient,
+    );
+  }
+
+  Widget listen(
+    void Function(BuildContext context, TCubit cubix) listener,
+    Widget child, {
+    Object? family,
+
+    /// remove cubix automatically when the widget is disposed
+    bool transient = false,
+  }) {
+    return CubixListener<TCubit>(
+      create: this,
+      listener: listener,
+      child: child,
+      family: family,
+      transient: transient,
+    );
+  }
+
+  Widget listenWhen<TState>(
+    bool Function(TState prev, TState next) condition,
+    void Function(BuildContext context, TCubit cubix) listener,
+    Widget child, {
+    Object? family,
+
+    /// remove cubix automatically when the widget is disposed
+    bool transient = false,
+  }) {
+    return CubixListener<TCubit>(
+      create: this,
+      listenWhen: (prev, next) => condition(prev as TState, next as TState),
+      listener: listener,
+      child: child,
       family: family,
       transient: transient,
     );
