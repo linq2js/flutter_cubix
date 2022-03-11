@@ -75,6 +75,69 @@ void main() {
     await Future.delayed(Duration.zero);
     expect(cubix.data, 2);
   });
+
+  test('flow', () async {
+    final cubix = TestFlowCubix();
+    cubix.up();
+    await Future.delayed(Duration.zero);
+    cubix.up();
+    await Future.delayed(Duration.zero);
+    cubix.down();
+    await Future.delayed(Duration.zero);
+    cubix.down();
+    await Future.delayed(Duration.zero);
+    expect(cubix.state, 'upupdowndown');
+
+    cubix.up();
+    await Future.delayed(Duration.zero);
+    cubix.up();
+    await Future.delayed(Duration.zero);
+    cubix.down();
+    await Future.delayed(Duration.zero);
+    cubix.down();
+    await Future.delayed(Duration.zero);
+    expect(cubix.state, 'upupdowndownupupdowndown');
+    cubix.reset();
+    cubix.up();
+    await Future.delayed(Duration.zero);
+    cubix.up();
+    expect(cubix.state, 'upup');
+    await Future.delayed(Duration.zero);
+    cubix.up();
+    await Future.delayed(Duration.zero);
+    // invalid action, state is reset
+    expect(cubix.state, '');
+  });
+}
+
+class TestFlowCubix extends Cubix<String> {
+  TestFlowCubix() : super('');
+
+  Iterable<Object> secretMoves(FlowContext context) sync* {
+    context.restartIfInvalid(reset);
+    while (true) {
+      yield up;
+      yield up;
+      yield down;
+      yield down;
+    }
+  }
+
+  void reset() {
+    emit('');
+  }
+
+  void up() {
+    transform(up, [flow(secretMoves)], () async {
+      emit(state + 'up');
+    });
+  }
+
+  void down() {
+    transform(down, [flow(secretMoves)], () async {
+      emit(state + 'down');
+    });
+  }
 }
 
 class TestAsyncCubix extends AsyncCubix<int> {

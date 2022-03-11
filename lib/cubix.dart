@@ -21,6 +21,17 @@ Transformer droppable() {
   };
 }
 
+Transformer flow(Flow flow, [Object? input]) {
+  return (context, next) {
+    var flowContext = context.tryGet<FlowContext>(
+      flow,
+      () => FlowContext(flow),
+      shared: true,
+    );
+    flowContext._next(context.key, input, context, next);
+  };
+}
+
 Transformer sequential() {
   return (context, next) {
     if (context.previous != null) {
@@ -48,6 +59,8 @@ Future<T> _neverDone<T>() => Completer<T>().future;
 void _noop() {}
 
 typedef CreateCubix<T extends Cubix> = T Function();
+
+typedef Flow = Iterable<Object> Function(FlowContext context);
 
 typedef OnCancel = VoidCallback Function(VoidCallback handler);
 
@@ -658,6 +671,62 @@ class DispatchAsyncContext<T> extends AsyncContext {
 
   void emit(T value) {
     _emit(value);
+  }
+}
+
+class FlowContext {
+  final Flow flow;
+  late Iterator<Object> _iterator;
+  Object? _action;
+  Object? _input;
+  Object? _queue;
+  bool _restartIfInvalid = false;
+  VoidCallback? _onRestart;
+
+  FlowContext(this.flow) {
+    _restart();
+  }
+
+  void _restart() {
+    _iterator = flow(this).iterator;
+    _enqueue();
+  }
+
+  void restartIfInvalid([VoidCallback? onRestart]) {
+    _restartIfInvalid = true;
+    _onRestart = onRestart;
+  }
+
+  Object get action => _action!;
+  Object get input => _input!;
+
+  void _enqueue() {
+    if (_iterator.moveNext()) {
+      _queue = _iterator.current;
+    } else {
+      _queue = null;
+    }
+  }
+
+  void _next(
+    Object action,
+    Object? input,
+    TransformContext context,
+    VoidCallback next,
+  ) {
+    // invalid action
+    if (_queue != action) {
+      if (_restartIfInvalid) {
+        _restart();
+        _onRestart?.call();
+      }
+      return context.cancelToken.cancel();
+    }
+    // valid action
+    _input = input;
+    _action = action;
+    context.onDone(_enqueue);
+    next();
   }
 }
 
