@@ -323,8 +323,9 @@ class CreateContext {
 abstract class Cubix<T> extends Cubit<T> {
   var _disposed = false;
   final _onDispose = <VoidCallback>{};
-  final _transformData = <Object?, Map<Object?, Object?>>{};
-  final _executing = <Function>[];
+  final _transformScopedData = <Object?, Map<Object?, Object?>>{};
+  final _transformSharedData = <Object?, Object?>{};
+  final _executing = <Object>[];
   late final DependencyResolver _resolver;
   late final Type _resolvedType;
   Object? _key;
@@ -357,7 +358,7 @@ abstract class Cubix<T> extends Cubit<T> {
   void onInit() {}
 
   Future<TResult> transform<TResult>(
-    Function key,
+    Object key,
     List<Transformer> trasnformers,
     Future<TResult> Function() execute, {
     CancelToken? cancelToken,
@@ -371,17 +372,17 @@ abstract class Cubix<T> extends Cubit<T> {
     }
 
     TransformContext? current;
-    var data = _transformData[key];
-    if (data == null) {
-      data = {};
-      _transformData[key] = data;
+    var scopedData = _transformScopedData[key];
+    if (scopedData == null) {
+      scopedData = {};
+      _transformScopedData[key] = scopedData;
     }
 
     void onDone() {
       if (done) return;
       done = true;
-      if (data![_Props.previousContext] == current) {
-        data.remove(_Props.previousContext);
+      if (scopedData![_Props.previousContext] == current) {
+        scopedData.remove(_Props.previousContext);
       }
       _executing.remove(key);
     }
@@ -404,14 +405,15 @@ abstract class Cubix<T> extends Cubit<T> {
     _executing.add(key);
 
     final context = current = TransformContext(
-      data[_Props.previousContext] as TransformContext?,
+      scopedData[_Props.previousContext] as TransformContext?,
       key,
-      data,
+      scopedData,
+      _transformSharedData,
       cancelToken,
       completer.future,
       _executing,
     );
-    data[_Props.previousContext] = current;
+    scopedData[_Props.previousContext] = current;
     final invoker = trasnformers.reversed.fold<VoidCallback>(
       next,
       (next, m) => () {
@@ -660,17 +662,19 @@ class DispatchAsyncContext<T> extends AsyncContext {
 }
 
 class TransformContext {
-  final Function key;
-  final Map<Object?, Object?> _data;
+  final Object key;
+  final Map<Object?, Object?> _scopedData;
+  final Map<Object?, Object?> _sharedData;
   final CancelToken cancelToken;
   final Future _future;
-  final List<Function> executing;
+  final List<Object> executing;
   final TransformContext? previous;
 
   TransformContext(
     this.previous,
     this.key,
-    this._data,
+    this._scopedData,
+    this._sharedData,
     this.cancelToken,
     this._future,
     this.executing,
@@ -678,23 +682,27 @@ class TransformContext {
 
   int get count => executing.where((element) => element == key).length;
 
-  T? get<T extends Object?>(Object? name) {
-    return _data[name] as T?;
+  T? get<T extends Object?>(Object? name, {bool shared = false}) {
+    final data = (shared ? _sharedData : _scopedData);
+    return data[name] as T?;
   }
 
   void onDone(VoidCallback callback) {
     _future.whenComplete(callback);
   }
 
-  set(Object? name, Object? value) {
-    _data[name] = value;
+  set(Object? name, Object? value, {bool shared = false}) {
+    final data = (shared ? _sharedData : _scopedData);
+    data[name] = value;
   }
 
-  T tryGet<T extends Object?>(Object? name, T Function() create) {
-    if (_data.containsKey(name)) {
-      return _data[name] as T;
+  T tryGet<T extends Object?>(Object? name, T Function() create,
+      {bool shared = false}) {
+    final data = (shared ? _sharedData : _scopedData);
+    if (data.containsKey(name)) {
+      return data[name] as T;
     }
-    return _data[name] = create();
+    return data[name] = create();
   }
 }
 
