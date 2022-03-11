@@ -1,3 +1,12 @@
+## 0.0.8
+
+- feat: support transformers
+- feat: debounce transformer
+- feat: throttle transformer
+- feat: droppable transformer
+- feat: sequential transformer
+- test: unit tests
+
 ## 0.0.7
 
 - feat: listenWhen extension
