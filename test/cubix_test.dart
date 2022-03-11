@@ -12,19 +12,6 @@ void main() {
     expect(cubix.state, 1);
   });
 
-  test('droppable', () async {
-    final cubix = TestCubix();
-    final running = Ref<bool>();
-    cubix.droppableTest(running);
-    expect(running.value, true);
-    expect(cubix.state, 0);
-    cubix.droppableTest(running);
-    cubix.droppableTest(running);
-    expect(cubix.state, 0);
-    await Future.delayed(const Duration(milliseconds: 15));
-    expect(cubix.state, 1);
-  });
-
   test('sequential', () async {
     final cubix = TestCubix();
     cubix.sequentialTest();
@@ -162,18 +149,6 @@ class TestCubix extends Cubix<int> {
       debounceTest,
       [debounce(const Duration(milliseconds: 10))],
       () async {
-        emit(state + 1);
-      },
-    );
-  }
-
-  void droppableTest(Ref<bool> running) {
-    transform(
-      droppableTest,
-      [droppable()],
-      () async {
-        running.value = true;
-        await Future.delayed(const Duration(milliseconds: 10));
         emit(state + 1);
       },
     );

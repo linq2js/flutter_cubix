@@ -5,19 +5,10 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
-Transformer debounce(Duration duration) {
+Transformer debounce([Duration duration = Duration.zero]) {
   return (context, next) {
     context.previous?.cancelToken.cancel();
-    context.cancelToken.onCancel(Timer(duration, next).cancel);
-  };
-}
-
-Transformer droppable() {
-  return (context, next) {
-    if (context.count >= 2) {
-      return context.cancelToken.cancel();
-    }
-    next();
+    context.onCancel(Timer(duration, next).cancel);
   };
 }
 
@@ -42,13 +33,23 @@ Transformer sequential() {
   };
 }
 
-Transformer throttle(Duration duration) {
+Transformer throttle([Duration duration = Duration.zero]) {
   return (context, next) {
     final lastTime = context.get<DateTime?>(_Props.throttleLastExecutionTime);
     final now = DateTime.now();
     final nextTime = lastTime?.add(duration);
     if (nextTime == null || nextTime.compareTo(now) <= 0) {
-      context.set(_Props.throttleLastExecutionTime, now);
+      context.set(_Props.throttleLastExecutionTime,
+          now.add(const Duration(hours: 999999)));
+
+      // reset last execution time
+      context.onCancel(() {
+        context.set(_Props.throttleLastExecutionTime, null);
+      });
+
+      context.onDone(() {
+        context.set(_Props.throttleLastExecutionTime, now);
+      });
       next();
     }
   };
@@ -305,6 +306,10 @@ class CancelToken {
   }
 
   void onCancel(VoidCallback handler) {
+    if (cancelled) {
+      handler();
+      return;
+    }
     _onCancel.add(handler);
   }
 }
@@ -754,6 +759,10 @@ class TransformContext {
   T? get<T extends Object?>(Object? name, {bool shared = false}) {
     final data = (shared ? _sharedData : _scopedData);
     return data[name] as T?;
+  }
+
+  void onCancel(VoidCallback callback) {
+    cancelToken.onCancel(callback);
   }
 
   void onDone(VoidCallback callback) {
