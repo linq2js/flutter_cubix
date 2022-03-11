@@ -4,6 +4,10 @@ version: 0.0.8
 homepage: https://github.com/linq2js/flutter_cubix
 repository: https://github.com/linq2js/flutter_cubix
 
+# must enable rps: dart pub global activate rps
+scripts:
+  publish: "flutter pub publish"
+
 environment:
   sdk: ">=2.16.1 <3.0.0"
   flutter: ">=1.17.0"
