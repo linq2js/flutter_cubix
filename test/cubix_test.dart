@@ -1,12 +1,21 @@
 import 'package:cubix/cubix.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hydrated_bloc/hydrated_bloc.dart';
 
 void main() {
+  test('SyncAction #1', () {
+    final cubix = TestCubix();
+    cubix.dispatch(IncrementAction());
+    expect(cubix.state, 1);
+    cubix.dispatch(IncrementAction());
+    expect(cubix.state, 2);
+  });
+
   test('debounce', () async {
     final cubix = TestCubix();
-    cubix.debounceTest();
-    cubix.debounceTest();
-    cubix.debounceTest();
+    cubix.dispatch(DebounceAction());
+    cubix.dispatch(DebounceAction());
+    cubix.dispatch(DebounceAction());
     expect(cubix.state, 0);
     await Future.delayed(const Duration(milliseconds: 15));
     expect(cubix.state, 1);
@@ -14,168 +23,138 @@ void main() {
 
   test('sequential', () async {
     final cubix = TestCubix();
-    cubix.sequentialTest();
-    cubix.sequentialTest();
-    cubix.sequentialTest();
-    expect(cubix.state, 0);
-    await Future.delayed(const Duration(milliseconds: 15));
-    expect(cubix.state, 1);
-    await Future.delayed(const Duration(milliseconds: 15));
-    expect(cubix.state, 2);
-    await Future.delayed(const Duration(milliseconds: 15));
+    cubix.dispatch(SequentialAction());
+    cubix.dispatch(SequentialAction());
+    cubix.dispatch(SequentialAction());
+    await Future.delayed(const Duration(milliseconds: 40));
     expect(cubix.state, 3);
   });
 
   test('throttle', () async {
     final cubix = TestCubix();
-    cubix.throttleTest();
+    cubix.dispatch(ThrottleAction());
     expect(cubix.state, 1);
-    cubix.throttleTest();
+    cubix.dispatch(ThrottleAction());
     expect(cubix.state, 1);
-    cubix.throttleTest();
+    cubix.dispatch(ThrottleAction());
     expect(cubix.state, 1);
     await Future.delayed(const Duration(milliseconds: 2));
-    cubix.throttleTest();
+    cubix.dispatch(ThrottleAction());
     expect(cubix.state, 1);
     await Future.delayed(const Duration(milliseconds: 30));
-    cubix.throttleTest();
+    cubix.dispatch(ThrottleAction());
     expect(cubix.state, 2);
   });
 
-  test('throttle:dispatch', () async {
-    final cubix = TestAsyncCubix();
-    cubix.throttleTest();
+  test('sync #1', () async {
+    final testCubix = TestCubix();
+    final resolver = DependencyResolver()..add(testCubix);
+    final doubleCubix = DoubleCubix()..resolve(resolver);
+    expect(doubleCubix.state, 0);
+    testCubix.dispatch(IncrementAction());
     await Future.delayed(Duration.zero);
-    expect(cubix.data, 1);
-    cubix.throttleTest();
-    await Future.delayed(Duration.zero);
-    expect(cubix.data, 1);
-    cubix.throttleTest();
-    await Future.delayed(Duration.zero);
-    expect(cubix.data, 1);
-    await Future.delayed(const Duration(milliseconds: 2));
-    cubix.throttleTest();
-    await Future.delayed(Duration.zero);
-    expect(cubix.data, 1);
-    await Future.delayed(const Duration(milliseconds: 30));
-    cubix.throttleTest();
-    await Future.delayed(Duration.zero);
-    expect(cubix.data, 2);
+    expect(doubleCubix.state, 2);
   });
 
-  test('flow', () async {
-    final cubix = TestFlowCubix();
-    cubix.up();
-    await Future.delayed(Duration.zero);
-    cubix.up();
-    await Future.delayed(Duration.zero);
-    cubix.down();
-    await Future.delayed(Duration.zero);
-    cubix.down();
-    await Future.delayed(Duration.zero);
-    expect(cubix.state, 'upupdowndown');
-
-    cubix.up();
-    await Future.delayed(Duration.zero);
-    cubix.up();
-    await Future.delayed(Duration.zero);
-    cubix.down();
-    await Future.delayed(Duration.zero);
-    cubix.down();
-    await Future.delayed(Duration.zero);
-    expect(cubix.state, 'upupdowndownupupdowndown');
-    cubix.reset();
-    cubix.up();
-    await Future.delayed(Duration.zero);
-    cubix.up();
-    expect(cubix.state, 'upup');
-    await Future.delayed(Duration.zero);
-    cubix.up();
-    await Future.delayed(Duration.zero);
-    // invalid action, state is reset
-    expect(cubix.state, '');
+  test('sync #2', () async {
+    final resolver = DependencyResolver();
+    final doubleCubix = DoubleCubix()..resolve(resolver);
+    expect(doubleCubix.state, 0);
   });
 }
 
-class TestFlowCubix extends Cubix<String> {
-  TestFlowCubix() : super('');
+class DebounceAction extends AsyncAction<void, int> {
+  @override
+  get rules => [debounce(const Duration(milliseconds: 10))];
 
-  Iterable<Object> secretMoves(FlowContext context) sync* {
-    context.restartIfInvalid(reset);
-    while (true) {
-      yield up;
-      yield up;
-      yield down;
-      yield down;
-    }
-  }
-
-  void reset() {
-    emit('');
-  }
-
-  void up() {
-    transform(up, [flow(secretMoves)], () async {
-      emit(state + 'up');
-    });
-  }
-
-  void down() {
-    transform(down, [flow(secretMoves)], () async {
-      emit(state + 'down');
-    });
+  @override
+  body() async {
+    state++;
   }
 }
 
-class TestAsyncCubix extends AsyncCubix<int> {
-  TestAsyncCubix() : super(0);
+class DoubleCubix extends HydratedCubix<int> {
+  late final TestCubix testCubix;
 
-  void throttleTest() {
-    dispatchAsync(
-      (context) async {
-        context.emit(data + 1);
-      },
-      key: throttleTest,
-      transform: [throttle(const Duration(milliseconds: 30))],
+  DoubleCubix() : super(0);
+
+  @override
+  void onCreate(CreateContext context) {
+    super.onCreate(context);
+    context.enableSync();
+    testCubix = context.resolve(TestCubix.new);
+  }
+
+  @override
+  void onInit(context) {
+    super.onInit(context);
+    state = testCubix.state * 2;
+  }
+}
+
+class HydratedCubitWrapper<TState> extends HydratedCubit<CubixState<TState>>
+    with CubixMixin<TState>
+    implements CubitWrapper<TState> {
+  HydratedCubitWrapper(TState initialState) : super(CubixState(initialState));
+
+  @override
+  CubixState<TState>? fromJson(Map<String, dynamic> json) {
+    return null;
+  }
+
+  @override
+  Map<String, dynamic>? toJson(CubixState<TState> state) {
+    return null;
+  }
+
+  @override
+  CubixState<TState> update(
+      {TState Function(TState state)? state,
+      Dispatcher? remove,
+      Dispatcher? add,
+      List<Dispatcher>? dispatchers}) {
+    return performUpdate(
+      () => this.state,
+      emit,
+      state: state,
+      add: add,
+      remove: remove,
+      dispatchers: dispatchers,
     );
+  }
+}
+
+abstract class HydratedCubix<TState> extends Cubix<TState> {
+  HydratedCubix(TState initialState)
+      : super(initialState, HydratedCubitWrapper.new);
+}
+
+class IncrementAction extends SyncAction<void, int> {
+  @override
+  body() => state++;
+}
+
+class SequentialAction extends AsyncAction<void, int> {
+  @override
+  get rules => [sequential()];
+
+  @override
+  body() async {
+    await Future.delayed(const Duration(milliseconds: 10));
+    state++;
   }
 }
 
 class TestCubix extends Cubix<int> {
   TestCubix() : super(0);
-
-  void debounceTest() {
-    transform(
-      debounceTest,
-      [debounce(const Duration(milliseconds: 10))],
-      () async {
-        emit(state + 1);
-      },
-    );
-  }
-
-  void sequentialTest() {
-    transform(
-      sequentialTest,
-      [sequential()],
-      () async {
-        await Future.delayed(const Duration(milliseconds: 10));
-        emit(state + 1);
-      },
-    );
-  }
-
-  void throttleTest() {
-    transform(
-      throttleTest,
-      [throttle(const Duration(milliseconds: 30))],
-      () async {
-        emit(state + 1);
-      },
-    );
-  }
 }
 
-class Ref<T> {
-  late final T value;
+class ThrottleAction extends AsyncAction<void, int> {
+  @override
+  get rules => [throttle(const Duration(milliseconds: 30))];
+
+  @override
+  body() async {
+    state++;
+  }
 }

@@ -6,7 +6,7 @@ A enhanced state management of Bloc
 
 1. State dependencies
 2. Auto sync state
-3. Async state handling
+3. Async action handling
 4. State updating cancellation
 
 ## Usages
@@ -17,8 +17,8 @@ A enhanced state management of Bloc
 // create a cubix
 class CounterCubix extends Cubix<int> {
     CounterCubix(): super(0);
-    void increment() => emit(state + 1);
-    void decrement() => emit(state - 1);
+    void increment() => state++;
+    void decrement() => state--;
 }
 
 void main() => runApp(App());
@@ -56,8 +56,8 @@ class App extends StatelessWidget {
 ```dart
 class CounterCubix extends Cubix<int> {
     CounterCubix(): super(0);
-    void increment() => emit(state + 1);
-    void decrement() => emit(state - 1);
+    void increment() => state++;
+    void decrement() => state--;
 }
 
 class DoubleCounterCubix extends Cubix<int> {
@@ -71,7 +71,7 @@ class DoubleCounterCubix extends Cubix<int> {
         // call enableSync to allow this cubix updates whenever its dependency cubixes are updated
         // if you want to debouce an update, just call enableSync(debounce: Duration(seconds: 1))
         context.enableSync();
-        counterCubix = context.fromCreator(CounterCubix.new);
+        counterCubix = context.resolve(CounterCubix.new);
     }
 
     @override

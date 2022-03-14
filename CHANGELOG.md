@@ -13,6 +13,12 @@
 - feat: listen extension
 - feat: CubixListener widget
 
+## 0.1.0
+
+- BREAKING CHANGE: change Cubix implementation
+- feat: AsyncAction dispatching
+- feat: SyncAction dispatching
+
 ## 0.0.6
 
 - fix: buildWhen extension

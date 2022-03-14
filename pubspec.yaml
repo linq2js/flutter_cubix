@@ -1,6 +1,6 @@
 name: cubix
 description: A enhanced Bloc state management
-version: 0.0.8
+version: 0.1.0
 homepage: https://github.com/linq2js/flutter_cubix
 repository: https://github.com/linq2js/flutter_cubix
 
@@ -13,12 +13,14 @@ environment:
   flutter: ">=1.17.0"
 
 dependencies:
+  collection: ^1.15.0
   flutter:
     sdk: flutter
   flutter_bloc: ^8.0.1
 
 dev_dependencies:
   flutter_lints: ^1.0.0
+  hydrated_bloc:
   flutter_test:
     sdk: flutter
 
