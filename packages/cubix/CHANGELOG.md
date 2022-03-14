@@ -1,6 +1,8 @@
+## 0.1.2
+
 ## 0.1.0+1
 
- - **REFACTOR**: support HygratedCubit.
+- **REFACTOR**: support HygratedCubit.
 
 ## 0.0.8
 
