@@ -95,25 +95,12 @@ abstract class Action<TResult, TState> {
   final _doneEmitter = _Emitter();
   final _errorEmitter = _Emitter<Object>();
   final _successEmitter = _Emitter();
+  final _testState = <TState>[];
 
   var _dispatched = false;
 
   Action() {
     on(error: onError, success: onSuccess, done: onDone);
-  }
-
-  Future<Action> when(bool Function(Action action) predicate, {Cubix? cubix}) {
-    final completer = Completer<Action>();
-    cubix ??= this.cubix;
-    VoidCallback? removeListener;
-    removeListener = cubix.listen((action) {
-      if (predicate(action)) {
-        removeListener?.call();
-        completer.complete(action);
-      }
-    });
-    dispatcher.on(remove: removeListener);
-    return completer.future;
   }
 
   bool get cancelled => dispatcher.cancelled;
@@ -171,6 +158,9 @@ abstract class Action<TResult, TState> {
   void onError(Object error) {}
 
   void onInit(Dispatcher dispatcher) {
+    if (_dispatched) {
+      throw Exception('Action is initialized');
+    }
     _dispatched = true;
     this.dispatcher = dispatcher;
     dispatcher.on(
@@ -197,6 +187,20 @@ abstract class Action<TResult, TState> {
     return completer.future;
   }
 
+  Future<Action> when(bool Function(Action action) predicate, {Cubix? cubix}) {
+    final completer = Completer<Action>();
+    cubix ??= this.cubix;
+    VoidCallback? removeListener;
+    removeListener = cubix.listen((action) {
+      if (predicate(action)) {
+        removeListener?.call();
+        completer.complete(action);
+      }
+    });
+    dispatcher.on(remove: removeListener);
+    return completer.future;
+  }
+
   Future<Map<TKey, Object?>> _handleAwaitable<TKey>(
       _AwaitType type, Map<TKey, Object?> awatiable) {
     final actions = <Action>[];
@@ -219,8 +223,7 @@ abstract class Action<TResult, TState> {
         } else if (value is Action) {
           actions.add(value);
           if (!value.dispatched) {
-            final dispatcher = cubix.attachAction(value);
-            value.onDispatch(dispatcher);
+            cubix.dispatchGeneric(value);
           }
           future = value.wait();
         } else {
@@ -399,16 +402,6 @@ abstract class Cubix<TState> implements IDependency {
     );
   }
 
-  VoidCallback listen(void Function(Action action) callback) {
-    var active = true;
-    _dispatchEmitter.on(callback);
-    return () {
-      if (!active) return;
-      active = false;
-      _dispatchEmitter.off(callback);
-    };
-  }
-
   @override
   Object? get key => _key;
 
@@ -459,6 +452,10 @@ abstract class Cubix<TState> implements IDependency {
     }
   }
 
+  bool canDispatch(Action action) {
+    return action._testState is List<TState>;
+  }
+
   /// dispatch specified action and return the result of action body
   TResult dispatch<TResult extends Object?>(
     Action<TResult, TState> action, {
@@ -468,12 +465,27 @@ abstract class Cubix<TState> implements IDependency {
     return action.onDispatch(dispatcher);
   }
 
+  void dispatchGeneric(Action action, {CancelToken? cancelToken}) {
+    final dispatcher = attachAction(action, cancelToken: cancelToken);
+    action.onDispatch(dispatcher);
+  }
+
   @override
   void dispose() {
     if (_disposed) return;
     _disposed = true;
     _syncCancelToken?.cancel();
     _disposeEmitter.emit(null);
+  }
+
+  VoidCallback listen(void Function(Action action) callback) {
+    var active = true;
+    _dispatchEmitter.on(callback);
+    return () {
+      if (!active) return;
+      active = false;
+      _dispatchEmitter.off(callback);
+    };
   }
 
   /// return true if there is any action dispatching
@@ -659,6 +671,16 @@ class DependencyResolver {
     collection[family] = dependency;
     dependency.resolve(this, key: family, resolvedType: T);
     return dependency;
+  }
+
+  void walk(bool? Function(IDependency dependency) walker) {
+    for (final group in _dependencies.values) {
+      for (final dependency in group.values) {
+        if (walker(dependency) == false) {
+          return;
+        }
+      }
+    }
   }
 
   Map<Object?, IDependency> _dependencyGroup(Type type) {
@@ -886,4 +908,16 @@ enum _Props { throttleLastExecutionTime }
 class _SyncConfigs {
   final Duration? debounce;
   _SyncConfigs({this.debounce});
+}
+
+extension DependencyResolverExtension on DependencyResolver {
+  void broadcast(Action Function() actionCreator, {CancelToken? cancelToken}) {
+    final testAction = actionCreator();
+    walk((dependency) {
+      if (dependency is Cubix && dependency.canDispatch(testAction)) {
+        dependency.dispatchGeneric(actionCreator(), cancelToken: cancelToken);
+      }
+      return true;
+    });
+  }
 }

@@ -152,6 +152,25 @@ void main() {
     await Future.delayed(Duration.zero);
     expect(done, true);
   });
+
+  test('broadcasting', () {
+    var result = 0;
+    final resolver = DependencyResolver();
+    resolver.resolve(() => BroadcastingCubix<int?>(
+          0,
+          () => result += 1,
+        ));
+    resolver.resolve(() => BroadcastingCubix<String?>(
+          '',
+          () => result += 2,
+        ));
+    resolver.resolve(() => BroadcastingCubix<Object?>(
+          null,
+          () => result += 4,
+        ));
+    resolver.broadcast(() => TestAction<int?>());
+    expect(result, 5);
+  });
 }
 
 class WhenAction extends AsyncAction<void, int> {
@@ -170,6 +189,21 @@ class RaceAction extends AsyncAction<Map<Object, Object?>, int> {
   body() async {
     return await race(awaitable);
   }
+}
+
+class BroadcastingCubix<T> extends Cubix<T> {
+  final VoidCallback callback;
+  BroadcastingCubix(T initialState, this.callback) : super(initialState);
+
+  @override
+  void onDispatch(Action action) {
+    callback();
+  }
+}
+
+class TestAction<T> extends SyncAction<void, T> {
+  @override
+  body() {}
 }
 
 class AllAction extends AsyncAction<Map<Object, Object?>, int> {

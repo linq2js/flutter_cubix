@@ -1,4 +1,4 @@
-import 'package:flutter/widgets.dart';
+import 'package:flutter/widgets.dart' hide Action;
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'cubix.dart';
@@ -137,12 +137,20 @@ class CubixProvider extends StatelessWidget {
 }
 
 extension BuildContextExtension on BuildContext {
+  DependencyResolver get resolver {
+    return RepositoryProvider.of<DependencyResolver>(this);
+  }
+
   /// get cubix that matches type T
   T cubix<T extends Cubix>(CreateCubix<T> create, {Object? family}) {
-    return RepositoryProvider.of<DependencyResolver>(this).resolve(
+    return resolver.resolve(
       create,
       family: family,
     );
+  }
+
+  void broadcast(Action Function() actionCreator, {CancelToken? cancelToken}) {
+    resolver.broadcast(actionCreator, cancelToken: cancelToken);
   }
 }
 
