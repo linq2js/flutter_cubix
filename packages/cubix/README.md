@@ -2,13 +2,6 @@
 
 A enhanced state management of Bloc
 
-## Features
-
-1. State dependencies
-2. Auto sync state
-3. Async action handling
-4. State updating cancellation
-
 ## Usages
 
 ### Simple Cubix
@@ -17,8 +10,44 @@ A enhanced state management of Bloc
 // create a cubix
 class CounterCubix extends Cubix<int> {
     CounterCubix(): super(0);
+
+    // method base action
     void increment() => state++;
-    void decrement() => state--;
+
+    @override
+    onDispatch(Action action) {
+        // tracking action dispatching
+        // cannot track method base actions (increment)
+        print(action.runtimeType.toString());
+    }
+}
+
+// class base action
+// using SyncAction for sync code
+class DecrementAction extends SyncAction<void, int> {
+    final int step;
+
+    DecrementAction(this.step = 1);
+
+    @override
+    body() {
+        // update state
+        state -= step;
+    }
+}
+
+class DecrementAsyncAction extends AsyncAction<void, int> {
+    final int step;
+
+    DecrementAsyncAction(this.step = 1);
+
+    @override
+    body() async {
+        // delay in 2 seconds
+        await Future.delayed(const Duation(seconds: 2));
+        // perform increment by dispatch another action
+        dispatch(DecrementAction(step));
+    }
 }
 
 void main() => runApp(App());
@@ -35,13 +64,19 @@ class App extends StatelessWidget {
                         // getting state of cubix
                         Text(cubix.state.toString()),
                         ElevatedButton(
-                            // incoking cubix method
-                            onPressed: cubix.increment,
+                            // resolve cubix from context object
+                            onPressed: context.cubix(CounterCubix.new).increment,
                             child: const Text('Increment'),
                         ),
                         ElevatedButton(
-                            onPressed: cubix.decrement,
+                            // dispatch class base action
+                            onPressed: () => cubix.dispatch(DecrementAction()),
                             child: const Text('Decrement'),
+                        ),
+                        ElevatedButton(
+                            // dispatch class base action with args
+                            onPressed: () => cubix.dispatch(DecrementAsyncAction(2)),
+                            child: const Text('Decrement Async'),
                         )
                     ]
                 );
@@ -54,30 +89,34 @@ class App extends StatelessWidget {
 ### Auto Sync
 
 ```dart
-class CounterCubix extends Cubix<int> {
-    CounterCubix(): super(0);
-    void increment() => state++;
-    void decrement() => state--;
+class ACubix extends Cubix<int> {
+    ACubix(): super(0);
 }
 
-class DoubleCounterCubix extends Cubix<int> {
-    late final CounterCubix counterCubix;
+class BCubix extends Cubix<int> {
+    ACubix(): super(0);
+}
 
-    DoubleCounterCubix(): super(0);
+class SumCubix extends Cubix<int> {
+    late final ACubix a$;
+    late final BCubix b$;
+
+    SumCubix(): super(0);
 
     @override
-    onCreate(context) {
+    onResolve(context) {
         super.onResolve(context);
         // call enableSync to allow this cubix updates whenever its dependency cubixes are updated
         // if you want to debouce an update, just call enableSync(debounce: Duration(seconds: 1))
         context.enableSync();
-        counterCubix = context.resolve(CounterCubix.new);
+        a$ = context.resolve(ACubix.new);
+        b$ = context.resolve(BCubix.new);
     }
 
     @override
     onInit() {
         super.onInit();
-        emit(counterCubix.state * 2);
+        emit(a$.state + b$.state);
     }
 }
 ```
