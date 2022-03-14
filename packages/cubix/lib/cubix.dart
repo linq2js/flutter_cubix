@@ -38,7 +38,7 @@ Rule debounce([Duration duration = Duration.zero]) {
         prevDispatcher.cancel();
       }
     }
-    dispatcher.onCancel(Timer(duration, next).cancel);
+    dispatcher.on(cancel: Timer(duration, next).cancel);
   };
 }
 
@@ -64,7 +64,7 @@ Rule sequential() {
     if (last == null) {
       next();
     } else {
-      last.onEnd(next);
+      last.on(remove: next);
     }
   };
 }
@@ -91,23 +91,42 @@ typedef Rule = void Function(Dispatcher dispatcher, VoidCallback next);
 typedef VoidCallback = void Function();
 
 abstract class Action<TResult, TState> {
-  late final Cubix<TState> cubix;
-  late final Dispatcher _dispatcher;
+  late final Dispatcher dispatcher;
   final _doneEmitter = _Emitter();
   final _errorEmitter = _Emitter<Object>();
   final _successEmitter = _Emitter();
 
+  var _dispatched = false;
+
   Action() {
-    _doneEmitter.on(onDone);
-    _successEmitter.on(onSuccess);
-    _errorEmitter.on(onError);
+    on(error: onError, success: onSuccess, done: onDone);
   }
 
-  bool get cancelled => _dispatcher.cancelled;
+  Future<Action> when(bool Function(Action action) predicate, {Cubix? cubix}) {
+    final completer = Completer<Action>();
+    cubix ??= this.cubix;
+    VoidCallback? removeListener;
+    removeListener = cubix.listen((action) {
+      if (predicate(action)) {
+        removeListener?.call();
+        completer.complete(action);
+      }
+    });
+    dispatcher.on(remove: removeListener);
+    return completer.future;
+  }
 
-  bool get done => _dispatcher.done;
+  bool get cancelled => dispatcher.cancelled;
 
-  Object? get error => _dispatcher.error;
+  Cubix<TState> get cubix => dispatcher.cubix as Cubix<TState>;
+
+  bool get dispatched => _dispatched;
+
+  bool get done => dispatched && dispatcher.done;
+
+  Object? get error => dispatched ? dispatcher.error : null;
+
+  TResult? get result => dispatcher.result as TResult;
 
   TState get state => cubix.state;
 
@@ -116,9 +135,19 @@ abstract class Action<TResult, TState> {
     cubix.state = state;
   }
 
+  bool get success => done && error == null;
+
+  Future<Map<TKey, Object?>> all<TKey>(Map<TKey, Object?> awatiable) {
+    return _handleAwaitable(_AwaitType.all, awatiable);
+  }
+
+  Future<Map<TKey, Object?>> allSettled<TKey>(Map<TKey, Object?> awatiable) {
+    return _handleAwaitable(_AwaitType.allSettled, awatiable);
+  }
+
   TResult body();
 
-  void cancel() => _dispatcher.cancel();
+  void cancel() => dispatcher.cancel();
 
   // dispatch other action
   TActionResult dispatch<TActionResult>(Action<TActionResult, TState> action,
@@ -126,23 +155,116 @@ abstract class Action<TResult, TState> {
     return cubix.dispatch(action, cancelToken: cancelToken);
   }
 
-  TResult onDispatch({
-    required Map<Object?, Object?> data,
-    CancelToken? cancelToken,
-  });
+  void on(
+      {VoidCallback? done,
+      VoidCallback? success,
+      void Function(Object)? error}) {
+    if (done != null) _doneEmitter.on(done);
+    if (success != null) _successEmitter.on(success);
+    if (error != null) _errorEmitter.on(error);
+  }
+
+  TResult onDispatch(Dispatcher dispatcher);
 
   void onDone() {}
 
   void onError(Object error) {}
 
+  void onInit(Dispatcher dispatcher) {
+    _dispatched = true;
+    this.dispatcher = dispatcher;
+    dispatcher.on(
+      done: () => _doneEmitter.emit(null),
+      success: () => _successEmitter.emit(null),
+      error: (e) => _errorEmitter.emit(e),
+    );
+  }
+
   void onResolve(DependencyResolver resolver) {}
 
   void onSuccess() {}
 
-  void _registerEventHandlers() {
-    _dispatcher.onDone(() => _doneEmitter.emit(null));
-    _dispatcher.onSuccess(() => _successEmitter.emit(null));
-    _dispatcher.onError(_errorEmitter.emit);
+  Future<Map<TKey, Object?>> race<TKey>(Map<TKey, Object?> awatiable) {
+    return _handleAwaitable(_AwaitType.race, awatiable);
+  }
+
+  Future<Object?> wait() {
+    final completer = Completer<Object?>();
+    on(
+      success: () => completer.complete(dispatcher.result),
+      error: completer.completeError,
+    );
+    return completer.future;
+  }
+
+  Future<Map<TKey, Object?>> _handleAwaitable<TKey>(
+      _AwaitType type, Map<TKey, Object?> awatiable) {
+    final actions = <Action>[];
+    final result = <TKey, Object?>{};
+    final futures = <Future>[];
+
+    void cancelAll() {
+      for (final action in actions) {
+        action.cancel();
+      }
+    }
+
+    try {
+      for (final entry in awatiable.entries) {
+        final value = entry.value;
+        Future? future;
+        // handle future object
+        if (value is Future) {
+          future = value;
+        } else if (value is Action) {
+          actions.add(value);
+          if (!value.dispatched) {
+            final dispatcher = cubix.attachAction(value);
+            value.onDispatch(dispatcher);
+          }
+          future = value.wait();
+        } else {
+          result[entry.key] = value;
+        }
+
+        if (future != null) {
+          futures.add(future.then(
+            (value) {
+              if (cancelled) return;
+              result[entry.key] = value;
+              if (type == _AwaitType.race) {
+                cancelAll();
+              }
+            },
+            onError: (e) {
+              if (cancelled) return;
+              if (type == _AwaitType.allSettled) {
+                result[entry.key] = e;
+                return;
+              }
+
+              cancelAll();
+              throw e;
+            },
+          ));
+        }
+      }
+    } catch (e) {
+      return Future.error(e);
+    }
+
+    final completer = Completer<Map<TKey, Object?>>();
+
+    (type == _AwaitType.race ? Future.any(futures) : Future.wait(futures)).then(
+        (value) {
+      if (cancelled) return;
+      completer.complete(result);
+    }, onError: (e) {
+      if (cancelled) return;
+      completer.completeError(e);
+    });
+
+    return completer.future;
   }
 
   void _resolve(DependencyResolver resolver) {
@@ -155,45 +277,33 @@ abstract class AsyncAction<TResult, TState>
   List<Rule> get rules => [];
 
   @override
-  Future<TResult> onDispatch({
-    required ActionData data,
-    CancelToken? cancelToken,
-  }) {
-    cancelToken ??= CancelToken();
-
-    _dispatcher = Dispatcher(
-        cubix: cubix,
-        dispatching: cubix.cubit.state.dispatchers,
-        cancelToken: cancelToken,
-        action: this,
-        data: data);
+  Future<TResult> onDispatch(Dispatcher dispatcher) {
     final completer = Completer<TResult>();
     final invoker = rules.reversed.fold<VoidCallback>(
       () {
-        if (cancelToken!.cancelled) return;
+        if (dispatcher.cancelled) return;
         body().then((value) {
-          if (cancelToken!.cancelled) return;
+          if (dispatcher.cancelled) return;
           completer.complete(value);
-          _dispatcher._onDone(null);
+          dispatcher.onDone(null, value);
         }, onError: (error) {
-          if (cancelToken!.cancelled) return;
+          if (dispatcher.cancelled) return;
           completer.completeError(error);
-          _dispatcher._onDone(error);
+          dispatcher.onDone(error, null);
         });
       },
       (next, m) => () {
-        if (cancelToken!.cancelled) return;
-        m(_dispatcher, next);
+        if (dispatcher.cancelled) return;
+        m(dispatcher, next);
       },
     );
-    _registerEventHandlers();
 
-    _dispatcher.onEnd(() {
-      cubix.cubit.update(remove: _dispatcher);
-      _dispatcher.dispose();
+    dispatcher.on(end: () {
+      cubix.cubit.update(remove: dispatcher);
+      dispatcher.dispose();
     });
 
-    cubix.cubit.update(add: _dispatcher);
+    cubix.cubit.update(add: dispatcher);
     invoker();
     return completer.future;
   }
@@ -222,12 +332,8 @@ class CancelToken {
     _cancelEmitter.emit(null);
   }
 
-  void onCancel(VoidCallback handler) {
-    if (cancelled) {
-      handler();
-      return;
-    }
-    _cancelEmitter.on(handler);
+  void on({VoidCallback? cancel}) {
+    if (cancel != null) _cancelEmitter.on(cancel);
   }
 }
 
@@ -277,6 +383,7 @@ abstract class Cubix<TState> implements IDependency {
   var _disposed = false;
 
   final _disposeEmitter = _Emitter();
+  final _dispatchEmitter = _Emitter<Action>(false);
 
   var _resolved = false;
 
@@ -290,6 +397,16 @@ abstract class Cubix<TState> implements IDependency {
           nextState: change.nextState.state)),
       error: onError,
     );
+  }
+
+  VoidCallback listen(void Function(Action action) callback) {
+    var active = true;
+    _dispatchEmitter.on(callback);
+    return () {
+      if (!active) return;
+      active = false;
+      _dispatchEmitter.off(callback);
+    };
   }
 
   @override
@@ -312,6 +429,27 @@ abstract class Cubix<TState> implements IDependency {
   @protected
   set state(TState state) => cubit.update(state: (prev) => state);
 
+  Dispatcher attachAction(Action action, {CancelToken? cancelToken}) {
+    var actionData = _data[action.runtimeType];
+    if (actionData == null) {
+      _data[action.runtimeType] = actionData = {};
+    }
+    if (_resolved) {
+      action._resolve(resolver);
+    }
+    final dispatcher = Dispatcher(
+      cubix: this,
+      dispatching: cubit.state.dispatchers,
+      cancelToken: cancelToken ?? CancelToken(),
+      action: action,
+      data: actionData,
+    );
+    action.onInit(dispatcher);
+    _dispatchEmitter.emit(action);
+    onDispatch(action);
+    return dispatcher;
+  }
+
   /// cancel all dispatching actions
   void cancel() {
     if (cubit.state.dispatchers.isEmpty) return;
@@ -326,16 +464,8 @@ abstract class Cubix<TState> implements IDependency {
     Action<TResult, TState> action, {
     CancelToken? cancelToken,
   }) {
-    action.cubix = this;
-    var actionData = _data[action.runtimeType];
-    if (actionData == null) {
-      _data[action.runtimeType] = actionData = {};
-    }
-    if (_resolved) {
-      action._resolve(resolver);
-    }
-    onDispatch(action);
-    return action.onDispatch(cancelToken: cancelToken, data: actionData);
+    final dispatcher = attachAction(action, cancelToken: cancelToken);
+    return action.onDispatch(dispatcher);
   }
 
   @override
@@ -406,7 +536,7 @@ abstract class Cubix<TState> implements IDependency {
         _syncCancelToken = context.cancelToken;
         if (sync.debounce != null) {
           context.cancelToken
-              .onCancel(Timer(sync.debounce!, () => onInit(context)).cancel);
+              .on(cancel: Timer(sync.debounce!, () => onInit(context)).cancel);
         } else {
           onInit(context);
         }
@@ -489,6 +619,7 @@ class CubixState<TState> {
         nextDispatchers = [...dispatchers];
       }
       nextDispatchers.remove(remove);
+      remove.onRemoved();
     }
     final nextState = state == null ? this.state : state(this.state);
 
@@ -558,11 +689,16 @@ class Dispatcher {
   final _doneEmitter = _Emitter();
   final _errorEmitter = _Emitter<Object>();
   final _successEmitter = _Emitter();
+  final _removeEmitter = _Emitter();
 
   bool _done = false;
   Object? _error;
 
   var _disposed = false;
+
+  var _removed = false;
+
+  Object? _result;
 
   Dispatcher({
     required this.cubix,
@@ -571,7 +707,7 @@ class Dispatcher {
     required this.dispatching,
     required this.data,
   }) {
-    onCancel(cancel);
+    cancelToken.on(cancel: cancel);
   }
 
   bool get cancelled => cancelToken.cancelled;
@@ -579,6 +715,8 @@ class Dispatcher {
   bool get done => _done;
 
   Object? get error => _error;
+
+  Object? get result => _result;
 
   void cancel() {
     if (cancelled || done) return;
@@ -591,51 +729,46 @@ class Dispatcher {
     _doneEmitter.clear();
     _successEmitter.clear();
     _errorEmitter.clear();
+    _removeEmitter.clear();
   }
 
-  void onCancel(VoidCallback callback) {
-    cancelToken.onCancel(callback);
-  }
-
-  void onDone(VoidCallback callback) {
-    if (cancelled) return;
-    if (_done) {
-      return callback();
+  void on({
+    VoidCallback? success,
+    VoidCallback? end,
+    VoidCallback? done,
+    VoidCallback? cancel,
+    VoidCallback? remove,
+    void Function(Object)? error,
+  }) {
+    if (success != null) _successEmitter.on(success);
+    if (end != null) {
+      _doneEmitter.on(end);
+      cancelToken.on(cancel: end);
     }
-    _doneEmitter.on(callback);
+    if (success != null) _successEmitter.on(success);
+    if (error != null) _errorEmitter.on(error);
+    if (remove != null) _removeEmitter.on(remove);
+    if (done != null) _doneEmitter.on(done);
   }
 
-  void onEnd(VoidCallback callback) {
-    onDone(callback);
-    onCancel(callback);
-  }
-
-  void onError(void Function(Object) callback) {
-    if (cancelled || done) return;
-    if (_done && _error != null) {
-      return callback(_error!);
-    }
-    _errorEmitter.on(callback);
-  }
-
-  void onSuccess(VoidCallback callback) {
-    if (cancelled || done) return;
-    if (_done && _error == null) {
-      return callback();
-    }
-    _successEmitter.on(callback);
-  }
-
-  void _onDone(Object? error) {
+  void onDone(Object? error, Object? result) {
     if (cancelled || done) return;
     _done = true;
     _error = error;
     if (error == null) {
+      _result = result;
       _successEmitter.emit(null);
     } else {
       _errorEmitter.emit(error);
     }
     _doneEmitter.emit(null);
+  }
+
+  void onRemoved() {
+    if (_removed) return;
+    _removed = true;
+    _removeEmitter.emit(null);
+    dispose();
   }
 }
 
@@ -672,46 +805,56 @@ class ResolveContext {
 
 abstract class SyncAction<TResult, TState> extends Action<TResult, TState> {
   @override
-  TResult onDispatch({
-    required Map<Object?, Object?> data,
-    CancelToken? cancelToken,
-  }) {
-    cancelToken ??= CancelToken();
-    _dispatcher = Dispatcher(
-        cubix: cubix,
-        action: this,
-        cancelToken: cancelToken,
-        dispatching: [],
-        data: data);
-
-    _registerEventHandlers();
-
+  TResult onDispatch(Dispatcher dispatcher) {
     try {
-      if (cancelToken.cancelled == true) {
+      if (dispatcher.cancelled == true) {
         throw CancelledException('Action is cancelled');
       }
 
       final result = body();
-      _dispatcher._onDone(null);
+      dispatcher.onDone(null, result);
       return result;
     } catch (e) {
-      _dispatcher._onDone(e);
+      dispatcher.onDone(e, null);
       rethrow;
     }
   }
 }
 
+enum _AwaitType { race, all, allSettled }
+
 class _Emitter<T extends Object?> {
+  final bool once;
   final handlers = <void Function(T)>[];
+  var _disposed = false;
+  var _emitted = false;
+  late T _lastEvent;
+
+  _Emitter([this.once = true]);
 
   void clear() {
     handlers.clear();
   }
 
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    clear();
+  }
+
   void emit(T e) {
+    if (once && _emitted) return;
+
+    _emitted = true;
+    _lastEvent = e;
+
     final copy = [...handlers];
     for (final callback in copy) {
       callback(e);
+    }
+
+    if (once) {
+      clear();
     }
   }
 
@@ -720,13 +863,21 @@ class _Emitter<T extends Object?> {
   }
 
   void on(Function handler) {
+    void Function(T) wrapper;
     if (handler is VoidCallback) {
-      handlers.add((e) => handler());
+      wrapper = (e) => handler();
     } else if (handler is void Function(T)) {
-      handlers.add(handler);
+      wrapper = handler;
     } else {
-      handlers.add((e) => handler(e));
+      wrapper = (e) => handler(e);
     }
+
+    if (once && _emitted) {
+      wrapper(_lastEvent);
+      return;
+    }
+
+    handlers.add(wrapper);
   }
 }
 

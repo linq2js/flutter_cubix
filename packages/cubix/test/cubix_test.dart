@@ -61,6 +61,150 @@ void main() {
     final doubleCubix = DoubleCubix()..resolve(resolver);
     expect(doubleCubix.state, 0);
   });
+
+  test('race #1', () async {
+    final testCubix = TestCubix();
+    final action1 = ValuedAsyncAction(1, const Duration(milliseconds: 10));
+    final action2 = ValuedAsyncAction(2, const Duration(milliseconds: 5));
+    final action3 = ValuedAsyncAction(2, const Duration(milliseconds: 15));
+    final result = await testCubix.dispatch(RaceAction({
+      1: action1,
+      2: action2,
+      3: action3,
+    }));
+
+    expect(result[2], 2);
+  });
+
+  test('race #2', () async {
+    final testCubix = TestCubix();
+    final action1 = ValuedAsyncAction(1, const Duration(milliseconds: 10));
+    final action2 = ValuedAsyncAction(2, const Duration(milliseconds: 5));
+    final action3 = ValuedAsyncAction(2, const Duration(milliseconds: 15));
+    final result = testCubix.dispatch(RaceAction({
+      1: action1,
+      2: action2,
+      3: action3,
+    }));
+    action2.cancel();
+    expect((await result)[1], 1);
+  });
+
+  test('all #1', () async {
+    final testCubix = TestCubix();
+    final action1 = ValuedAsyncAction(1, const Duration(milliseconds: 10));
+    final action2 = ValuedAsyncAction(2, const Duration(milliseconds: 5));
+    final action3 = ValuedAsyncAction(3, const Duration(milliseconds: 15));
+    final result = await testCubix.dispatch(AllAction({
+      1: action1,
+      2: action2,
+      3: action3,
+    }));
+    expect(result[1], 1);
+    expect(result[2], 2);
+    expect(result[3], 3);
+  });
+
+  test('all #2', () async {
+    final testCubix = TestCubix();
+    final action1 = ValuedAsyncAction(1, const Duration(milliseconds: 10));
+    final action2 = ValuedAsyncAction(2, const Duration(milliseconds: 5));
+    final action3 = ValuedAsyncAction(2, const Duration(milliseconds: 15));
+    var done = false;
+    final result = testCubix.dispatch(AllAction({
+      1: action1,
+      2: action2,
+      3: action3,
+      4: Future.error(Exception('invalid'))
+    }));
+    result.then((_) => done = true);
+    await Future.delayed(const Duration(milliseconds: 30));
+    expect(done, false);
+  });
+
+  test('allSettled', () async {
+    final testCubix = TestCubix();
+    final action1 = ValuedAsyncAction(1, const Duration(milliseconds: 10));
+    final action2 = ValuedAsyncAction(2, const Duration(milliseconds: 5));
+    final action3 = ValuedAsyncAction(3, const Duration(milliseconds: 15));
+    final result = await testCubix.dispatch(AllSettledAction({
+      1: action1,
+      2: action2,
+      3: action3,
+      4: Future.error(Exception('invalid'))
+    }));
+    expect(result[1], 1);
+    expect(result[2], 2);
+    expect(result[3], 3);
+    expect(result[4] is Exception, true);
+  });
+
+  test('when', () async {
+    final testCubix = TestCubix();
+    var done = false;
+    testCubix.dispatch(WhenAction()).then((value) {
+      done = true;
+    });
+    expect(done, false);
+    await Future.delayed(const Duration(milliseconds: 10));
+    expect(done, false);
+    testCubix.dispatch(IncrementAction());
+    await Future.delayed(Duration.zero);
+    expect(done, true);
+  });
+}
+
+class WhenAction extends AsyncAction<void, int> {
+  @override
+  body() async {
+    await when((action) => action is IncrementAction);
+  }
+}
+
+class RaceAction extends AsyncAction<Map<Object, Object?>, int> {
+  final Map<Object, Object?> awaitable;
+
+  RaceAction(this.awaitable);
+
+  @override
+  body() async {
+    return await race(awaitable);
+  }
+}
+
+class AllAction extends AsyncAction<Map<Object, Object?>, int> {
+  final Map<Object, Object?> awaitable;
+
+  AllAction(this.awaitable);
+
+  @override
+  body() async {
+    return await all(awaitable);
+  }
+}
+
+class AllSettledAction extends AsyncAction<Map<Object, Object?>, int> {
+  final Map<Object, Object?> awaitable;
+
+  AllSettledAction(this.awaitable);
+
+  @override
+  body() async {
+    return await allSettled(awaitable);
+  }
+}
+
+class ValuedAsyncAction extends AsyncAction<int, int> {
+  final int value;
+  final Duration delay;
+
+  ValuedAsyncAction(this.value, this.delay);
+
+  @override
+  body() async {
+    await Future.delayed(delay);
+    return value;
+  }
 }
 
 class DebounceAction extends AsyncAction<void, int> {
@@ -79,16 +223,16 @@ class DoubleCubix extends HydratedCubix<int> {
   DoubleCubix() : super(0);
 
   @override
+  void onInit(context) {
+    super.onInit(context);
+    state = testCubix.state * 2;
+  }
+
+  @override
   void onResolve(ResolveContext context) {
     super.onResolve(context);
     context.enableSync();
     testCubix = context.resolve(TestCubix.new);
-  }
-
-  @override
-  void onInit(context) {
-    super.onInit(context);
-    state = testCubix.state * 2;
   }
 }
 
