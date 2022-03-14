@@ -1,0 +1,22 @@
+name: hydrated_cubix
+description: An extension to package:cubix which automatically persists and restores cubix state. Built to work with package:cubix.
+version: 0.0.1
+homepage: https://github.com/linq2js/flutter_cubix
+repository: https://github.com/linq2js/flutter_cubix
+
+environment:
+  sdk: ">=2.16.1 <3.0.0"
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cubix: 0.1.0+1
+  hydrated_bloc:
+
+dev_dependencies:
+  flutter_lints: ^1.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter: null
