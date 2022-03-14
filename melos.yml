@@ -2,6 +2,7 @@ name: cubix
 
 packages:
   - cubix/**
+  - hydrated_cubix/**
 
 scripts:
   test:selective_unit_test:
