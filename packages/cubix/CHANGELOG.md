@@ -1,3 +1,7 @@
+## 0.1.0+1
+
+ - **REFACTOR**: support HygratedCubit.
+
 ## 0.0.8
 
 - feat: support transformers
