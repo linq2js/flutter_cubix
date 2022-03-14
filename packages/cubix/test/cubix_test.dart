@@ -79,8 +79,8 @@ class DoubleCubix extends HydratedCubix<int> {
   DoubleCubix() : super(0);
 
   @override
-  void onCreate(CreateContext context) {
-    super.onCreate(context);
+  void onResolve(ResolveContext context) {
+    super.onResolve(context);
     context.enableSync();
     testCubix = context.resolve(TestCubix.new);
   }

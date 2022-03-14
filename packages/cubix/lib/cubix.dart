@@ -93,12 +93,15 @@ typedef VoidCallback = void Function();
 abstract class Action<TResult, TState> {
   late final Cubix<TState> cubix;
   late final Dispatcher _dispatcher;
+  final _doneEmitter = _Emitter();
+  final _errorEmitter = _Emitter<Object>();
+  final _successEmitter = _Emitter();
 
-  void Function(Object)? onError;
-
-  VoidCallback? onSuccess;
-
-  VoidCallback? onDone;
+  Action() {
+    _doneEmitter.on(onDone);
+    _successEmitter.on(onSuccess);
+    _errorEmitter.on(onError);
+  }
 
   bool get cancelled => _dispatcher.cancelled;
 
@@ -117,12 +120,30 @@ abstract class Action<TResult, TState> {
 
   void cancel() => _dispatcher.cancel();
 
-  TResult dispatch({
+  // dispatch other action
+  TActionResult dispatch<TActionResult>(Action<TActionResult, TState> action,
+      {CancelToken? cancelToken}) {
+    return cubix.dispatch(action, cancelToken: cancelToken);
+  }
+
+  TResult onDispatch({
     required Map<Object?, Object?> data,
     CancelToken? cancelToken,
   });
 
+  void onDone() {}
+
+  void onError(Object error) {}
+
   void onResolve(DependencyResolver resolver) {}
+
+  void onSuccess() {}
+
+  void _registerEventHandlers() {
+    _dispatcher.onDone(() => _doneEmitter.emit(null));
+    _dispatcher.onSuccess(() => _successEmitter.emit(null));
+    _dispatcher.onError(_errorEmitter.emit);
+  }
 
   void _resolve(DependencyResolver resolver) {
     onResolve(resolver);
@@ -134,7 +155,7 @@ abstract class AsyncAction<TResult, TState>
   List<Rule> get rules => [];
 
   @override
-  Future<TResult> dispatch({
+  Future<TResult> onDispatch({
     required ActionData data,
     CancelToken? cancelToken,
   }) {
@@ -165,10 +186,8 @@ abstract class AsyncAction<TResult, TState>
         m(_dispatcher, next);
       },
     );
+    _registerEventHandlers();
 
-    if (onDone != null) _dispatcher.onDone(onDone!);
-    if (onSuccess != null) _dispatcher.onSuccess(onSuccess!);
-    if (onError != null) _dispatcher.onError(onError!);
     _dispatcher.onEnd(() {
       cubix.cubit.update(remove: _dispatcher);
       _dispatcher.dispose();
@@ -181,6 +200,12 @@ abstract class AsyncAction<TResult, TState>
 }
 
 class AsyncState<TData> {}
+
+class CancelledException with Exception {
+  final String message;
+
+  CancelledException(this.message);
+}
 
 class CancelToken {
   final bool Function()? _isCancelled;
@@ -206,25 +231,40 @@ class CancelToken {
   }
 }
 
-class CreateContext {
-  final DependencyResolver _resolver;
-  _SyncConfigs? _sync;
-  final dependencies = <Cubix>[];
+class CubitWrapper<TState> extends Cubit<CubixState<TState>>
+    with CubixMixin<TState> {
+  CubitWrapper(TState initialState) : super(CubixState(initialState));
 
-  CreateContext(this._resolver);
-
-  void enableSync({Duration? debounce}) {
-    _sync = _SyncConfigs(debounce: debounce);
+  @override
+  void onChange(Change<CubixState<TState>> change) {
+    super.onChange(change);
+    fireOnChange(change);
   }
 
-  T resolve<T extends Cubix>(CreateCubix<T> create, {Object? family}) {
-    final cubix = _resolver.resolve(create, family: family);
-    dependencies.add(cubix);
-    return cubix;
+  @override
+  void onError(Object error, StackTrace stackTrace) {
+    super.onError(error, stackTrace);
+    fireOnError(error, stackTrace);
+  }
+
+  CubixState<TState> update({
+    TState Function(TState state)? state,
+    Dispatcher? remove,
+    Dispatcher? add,
+    List<Dispatcher>? dispatchers,
+  }) {
+    return performUpdate(
+      () => this.state,
+      emit,
+      state: state,
+      remove: remove,
+      add: add,
+      dispatchers: dispatchers,
+    );
   }
 }
 
-abstract class Cubix<TState> {
+abstract class Cubix<TState> implements IDependency {
   final CubitWrapper<TState> cubit;
   final _data = <Type, ActionData>{};
 
@@ -252,8 +292,10 @@ abstract class Cubix<TState> {
     );
   }
 
+  @override
   Object? get key => _key;
 
+  @override
   Type get resolvedType => _resolvedType ?? runtimeType;
 
   DependencyResolver get resolver {
@@ -280,7 +322,7 @@ abstract class Cubix<TState> {
   }
 
   /// dispatch specified action and return the result of action body
-  TResult dispatch<TResult>(
+  TResult dispatch<TResult extends Object?>(
     Action<TResult, TState> action, {
     CancelToken? cancelToken,
   }) {
@@ -293,9 +335,10 @@ abstract class Cubix<TState> {
       action._resolve(resolver);
     }
     onDispatch(action);
-    return action.dispatch(cancelToken: cancelToken, data: actionData);
+    return action.onDispatch(cancelToken: cancelToken, data: actionData);
   }
 
+  @override
   void dispose() {
     if (_disposed) return;
     _disposed = true;
@@ -325,9 +368,6 @@ abstract class Cubix<TState> {
 
   void onChange(Change<TState> change) {}
 
-  /// when cubix is created, this method will be called to make sure all cubix dependencies are resolved
-  void onCreate(CreateContext context) {}
-
   /// this method will be called whenever action dispatches
   void onDispatch(Action action) {}
 
@@ -337,19 +377,26 @@ abstract class Cubix<TState> {
   /// if sync configs is enabled, it will run whenever dependency cubixes are updated
   void onInit(InitContext context) {}
 
+  /// when cubix is resolved, this method will be called to make sure all cubix dependencies are resolved
+  void onResolve(ResolveContext context) {}
+
   void remove() {
     resolver.remove(this);
   }
 
+  @override
   void resolve(DependencyResolver resolver, {Object? key, Type? resolvedType}) {
+    if (_resolved) {
+      throw Exception('resolve() method can be called once');
+    }
     _resolved = true;
     _key = key;
     _resolvedType = resolvedType ?? runtimeType;
     _resolver = resolver;
 
     VoidCallback? handleChange;
-    final context = CreateContext(resolver);
-    onCreate(context);
+    final context = ResolveContext(resolver);
+    onResolve(context);
     final sync = context._sync;
     if (sync != null) {
       handleChange = () {
@@ -375,6 +422,42 @@ abstract class Cubix<TState> {
       _syncCancelToken = context.cancelToken;
       onInit(context);
     }
+  }
+}
+
+mixin CubixMixin<TState> {
+  void Function(Object error, StackTrace stackTrace)? _onError;
+  void Function(Change<CubixState<TState>> change)? _onChange;
+
+  void fireOnChange(Change<CubixState<TState>> change) {
+    _onChange?.call(change);
+  }
+
+  void fireOnError(Object error, StackTrace stackTrace) {
+    _onError?.call(error, stackTrace);
+  }
+
+  void on(
+      {Function(Object error, StackTrace stackTrace)? error,
+      Function(Change<CubixState<TState>> change)? change}) {
+    _onChange = change;
+    _onError = error;
+  }
+
+  CubixState<TState> performUpdate(
+    CubixState<TState> Function() get,
+    void Function(CubixState<TState>) emit, {
+    TState Function(TState state)? state,
+    Dispatcher? remove,
+    Dispatcher? add,
+    List<Dispatcher>? dispatchers,
+  }) {
+    final prevState = get();
+    final nextState = prevState.reduce(
+        state: state, add: add, remove: remove, dispatchers: dispatchers);
+    if (nextState == prevState) return prevState;
+    emit(nextState);
+    return prevState;
   }
 }
 
@@ -420,103 +503,34 @@ class CubixState<TState> {
   }
 }
 
-mixin CubixMixin<TState> {
-  void Function(Object error, StackTrace stackTrace)? _onError;
-  void Function(Change<CubixState<TState>> change)? _onChange;
-
-  void on(
-      {Function(Object error, StackTrace stackTrace)? error,
-      Function(Change<CubixState<TState>> change)? change}) {
-    _onChange = change;
-    _onError = error;
-  }
-
-  void fireOnChange(Change<CubixState<TState>> change) {
-    _onChange?.call(change);
-  }
-
-  void fireOnError(Object error, StackTrace stackTrace) {
-    _onError?.call(error, stackTrace);
-  }
-
-  CubixState<TState> performUpdate(
-    CubixState<TState> Function() get,
-    void Function(CubixState<TState>) emit, {
-    TState Function(TState state)? state,
-    Dispatcher? remove,
-    Dispatcher? add,
-    List<Dispatcher>? dispatchers,
-  }) {
-    final prevState = get();
-    final nextState = prevState.reduce(
-        state: state, add: add, remove: remove, dispatchers: dispatchers);
-    if (nextState == prevState) return prevState;
-    emit(nextState);
-    return prevState;
-  }
-}
-
-class CubitWrapper<TState> extends Cubit<CubixState<TState>>
-    with CubixMixin<TState> {
-  CubitWrapper(TState initialState) : super(CubixState(initialState));
-
-  @override
-  void onChange(Change<CubixState<TState>> change) {
-    super.onChange(change);
-    fireOnChange(change);
-  }
-
-  @override
-  void onError(Object error, StackTrace stackTrace) {
-    super.onError(error, stackTrace);
-    fireOnError(error, stackTrace);
-  }
-
-  CubixState<TState> update({
-    TState Function(TState state)? state,
-    Dispatcher? remove,
-    Dispatcher? add,
-    List<Dispatcher>? dispatchers,
-  }) {
-    return performUpdate(
-      () => this.state,
-      emit,
-      state: state,
-      remove: remove,
-      add: add,
-      dispatchers: dispatchers,
-    );
-  }
-}
-
 class DependencyResolver {
-  final _dependencies = <Type, Map<Object?, Cubix>>{};
+  final _dependencies = <Type, Map<Object?, IDependency>>{};
 
-  void add<T extends Cubix>(T dependency, [Object? family]) {
-    final collection = _collection(T);
+  void add<T extends IDependency>(T dependency, [Object? family]) {
+    final collection = _dependencyGroup(T);
     collection[family] = dependency;
   }
 
-  void remove<TCubix extends Cubix>(TCubix cubix) {
-    final collection = _collection(cubix.resolvedType);
-    collection.remove(cubix._key);
-    cubix.dispose();
+  void remove<T extends IDependency>(T dependency) {
+    final collection = _dependencyGroup(dependency.resolvedType);
+    collection.remove(dependency.key);
+    dependency.dispose();
   }
 
-  T resolve<T extends Cubix>(
-    CreateCubix<T> create, {
+  T resolve<T extends IDependency>(
+    T Function() create, {
     Object? family,
   }) {
-    var collection = _collection(T);
-    var obj = collection[family] as T?;
-    if (obj != null) return obj;
-    obj = create();
-    collection[family] = obj;
-    obj.resolve(this, key: family, resolvedType: T);
-    return obj;
+    var collection = _dependencyGroup(T);
+    var dependency = collection[family] as T?;
+    if (dependency != null) return dependency;
+    dependency = create();
+    collection[family] = dependency;
+    dependency.resolve(this, key: family, resolvedType: T);
+    return dependency;
   }
 
-  Map<Object?, Cubix> _collection(Type type) {
+  Map<Object?, IDependency> _dependencyGroup(Type type) {
     var collection = _dependencies[type];
     if (collection == null) {
       collection = {};
@@ -625,15 +639,40 @@ class Dispatcher {
   }
 }
 
+abstract class IDependency {
+  Object? get key;
+  Type get resolvedType;
+  void dispose();
+  void resolve(DependencyResolver resolver, {Object? key, Type? resolvedType});
+}
+
 class InitContext {
   final cancelToken = CancelToken();
 
   InitContext();
 }
 
+class ResolveContext {
+  final DependencyResolver _resolver;
+  _SyncConfigs? _sync;
+  final dependencies = <Cubix>[];
+
+  ResolveContext(this._resolver);
+
+  void enableSync({Duration? debounce}) {
+    _sync = _SyncConfigs(debounce: debounce);
+  }
+
+  T resolve<T extends Cubix>(CreateCubix<T> create, {Object? family}) {
+    final cubix = _resolver.resolve(create, family: family);
+    dependencies.add(cubix);
+    return cubix;
+  }
+}
+
 abstract class SyncAction<TResult, TState> extends Action<TResult, TState> {
   @override
-  TResult dispatch({
+  TResult onDispatch({
     required Map<Object?, Object?> data,
     CancelToken? cancelToken,
   }) {
@@ -645,11 +684,13 @@ abstract class SyncAction<TResult, TState> extends Action<TResult, TState> {
         dispatching: [],
         data: data);
 
-    if (cancelToken.cancelled == true) {
-      throw Exception('Action is cancelled');
-    }
+    _registerEventHandlers();
 
     try {
+      if (cancelToken.cancelled == true) {
+        throw CancelledException('Action is cancelled');
+      }
+
       final result = body();
       _dispatcher._onDone(null);
       return result;
