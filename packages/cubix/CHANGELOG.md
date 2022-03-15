@@ -1,3 +1,7 @@
+## 0.1.4+1
+
+ - **FIX**: canDispatch.
+
 ## 0.1.4
 
  - **FEAT**: broadcast.
