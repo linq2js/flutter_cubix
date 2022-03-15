@@ -1,3 +1,7 @@
+## 0.1.4+2
+
+ - **REFACTOR**: cubix init.
+
 ## 0.1.4+1
 
  - **FIX**: canDispatch.
