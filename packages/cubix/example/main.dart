@@ -13,6 +13,7 @@ class CounterCubix extends Cubix<int> {
   onDispatch(ActionBase action) {
     // tracking action dispatching
     // cannot track method base actions (increment)
+    // ignore: avoid_print
     print(action.runtimeType.toString());
   }
 }

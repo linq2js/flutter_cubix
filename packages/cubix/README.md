@@ -95,22 +95,13 @@ class App extends StatelessWidget {
 class UserCubix extends Cubix<User> {}
 
 class ArticleListCubix extends Cubix<List<Article>> {
-    // create local variable to store UserCubix
-    late final UserCubix user$;
-
     ArticleListCubix(): super([]);
 
-    // override onResolve to resolve UserCubix and assign it to local variable
     @override
-    onResolve(context) {
-        user$ = context.resolve(UserCubix.new);
-    }
-
-    // override onInit to initialize state after all dependencies are resolved
-    @override
-    onInit() {
+    onResolve(context) async {
+        final user$ = context.resolve(UserCubix.new);
         state = await LoadArticleByUser(user$.state.id);
-    }
+    };
 }
 ```
 
@@ -126,25 +117,16 @@ class BCubix extends Cubix<int> {
 }
 
 class SumCubix extends Cubix<int> {
-    late final ACubix a$;
-    late final BCubix b$;
-
     SumCubix(): super(0);
 
     @override
     onResolve(context) {
-        super.onResolve(context);
-        // call enableSync to allow this cubix updates whenever its dependency cubixes are updated
-        // if you want to debouce an update, just call enableSync(debounce: Duration(seconds: 1))
-        context.enableSync();
-        a$ = context.resolve(ACubix.new);
-        b$ = context.resolve(BCubix.new);
-    }
+        final a$ = context.resolve(ACubix.new);
+        final b$ = context.resolve(BCubix.new);
 
-    @override
-    onInit() {
-        super.onInit();
-        state = a$.state + b$.state;
+        context.sync([a$, b$], (cancelToken) {
+          state = a$.state + b$.state;
+        });
     }
 }
 ```
@@ -154,6 +136,7 @@ class SumCubix extends Cubix<int> {
 ```dart
 abstract class User {}
 
+// define some user types
 class AnonymousUser extends User {}
 
 class AuthenticatedUser extends User {
@@ -161,17 +144,19 @@ class AuthenticatedUser extends User {
     const AuthenticatedUser(this.data);
 }
 
+// define cubix
 class UserCubix extends Cubix<User> {
-    UserCubix(): super(AnonymousUser());
-
-    onInit() async {
-        // listen logout
-        listen((action) {
-            if (action is LogoutAction) {
-                state = AnonymousUser();
-            }
-        });
-        dispatch(LoadUserAction());
+    // at begining time, cubix has an AnonymousUser state
+    UserCubix(): super(AnonymousUser()) {
+      // listen logout
+      listen((action) {
+          // when action logout is dispatched
+          if (action is LogoutAction) {
+              // change current user to anonymous
+              state = AnonymousUser();
+          }
+      });
+      dispatch(LoadUserAction());
     }
 }
 
@@ -183,7 +168,9 @@ class LoadUserAction extends AsyncAction<void, User> {
     }
 }
 
+// VoidAction is an no body action
 class LogoutAction extends VoidAction<User> {}
+
 ```
 
 ### Cubix and Action compatible

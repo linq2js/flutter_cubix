@@ -1,7 +1,48 @@
-import 'package:flutter/widgets.dart' hide Action;
+import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'cubix.dart';
+
+class Cubiw<TCubix extends Cubix> extends CubiwBase<TCubix> {
+  final Widget Function(BuildContext context, TCubix cubix) builder;
+
+  const Cubiw(TCubix Function() create, this.builder, {Key? key})
+      : super(create, key: key);
+
+  @override
+  Widget build(BuildContext context, TCubix cubix) {
+    return builder(context, cubix);
+  }
+
+  @override
+  State<StatefulWidget> createState() {
+    return CubiwBaseState<TCubix>();
+  }
+}
+
+abstract class CubiwBase<TCubix extends Cubix> extends StatefulWidget {
+  final TCubix Function() create;
+
+  const CubiwBase(this.create, {Key? key}) : super(key: key);
+
+  @protected
+  Widget build(BuildContext context, TCubix cubix);
+
+  @override
+  State<StatefulWidget> createState() {
+    return CubiwBaseState<TCubix>();
+  }
+}
+
+class CubiwBaseState<TCubix extends Cubix> extends State<CubiwBase<TCubix>> {
+  final Object _defaultKey = Object();
+
+  @override
+  Widget build(BuildContext context) {
+    final family = widget.key ?? _defaultKey;
+    return widget.create.build(widget.build, family: family, transient: true);
+  }
+}
 
 class CubixBuilder<TCubix extends Cubix> extends StatefulWidget {
   final bool Function(Object? prev, Object? next)? buildWhen;
@@ -124,13 +165,19 @@ class CubixListenerState<TCubix extends Cubix>
 
 class CubixProvider extends StatelessWidget {
   final Widget child;
+  final void Function(DependencyResolver resolve)? dependencies;
 
-  const CubixProvider({Key? key, required this.child}) : super(key: key);
+  const CubixProvider({Key? key, required this.child, this.dependencies})
+      : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return RepositoryProvider(
-      create: (context) => DependencyResolver(),
+      create: (context) {
+        final resolver = DependencyResolver();
+        dependencies?.call(resolver);
+        return resolver;
+      },
       child: child,
     );
   }
@@ -141,17 +188,17 @@ extension BuildContextExtension on BuildContext {
     return RepositoryProvider.of<DependencyResolver>(this);
   }
 
+  void broadcast(ActionBase Function() actionCreator,
+      {CancelToken? cancelToken}) {
+    resolver.broadcast(actionCreator, cancelToken: cancelToken);
+  }
+
   /// get cubix that matches type T
   T cubix<T extends Cubix>(CreateCubix<T> create, {Object? family}) {
     return resolver.resolve(
       create,
       family: family,
     );
-  }
-
-  void broadcast(ActionBase Function() actionCreator,
-      {CancelToken? cancelToken}) {
-    resolver.broadcast(actionCreator, cancelToken: cancelToken);
   }
 }
 

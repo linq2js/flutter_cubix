@@ -276,21 +276,13 @@ class DebounceAction extends AsyncAction<void, int> {
 }
 
 class DoubleCubix extends HydratedCubix<int> {
-  late final TestCubix testCubix;
-
   DoubleCubix() : super(0);
 
   @override
-  void onInit(context) {
-    super.onInit(context);
-    state = testCubix.state * 2;
-  }
+  void onResolve(context) {
+    final testCubix = context.resolve(TestCubix.new);
 
-  @override
-  void onResolve(ResolveContext context) {
-    super.onResolve(context);
-    context.enableSync();
-    testCubix = context.resolve(TestCubix.new);
+    context.sync([testCubix], (_) => state = testCubix.state * 2);
   }
 }
 
