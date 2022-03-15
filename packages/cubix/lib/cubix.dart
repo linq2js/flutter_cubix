@@ -5,7 +5,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 /// cancel all action rule
-Rule cancelAll<TAction extends Object?>([bool Function(Action)? predicate]) {
+Rule cancelAll<TAction extends Object?>(
+    [bool Function(ActionBase)? predicate]) {
   return (dispatcher, next) {
     if (predicate != null) {
       // cancel all actions that matches a predicate
@@ -90,16 +91,15 @@ typedef Rule = void Function(Dispatcher dispatcher, VoidCallback next);
 
 typedef VoidCallback = void Function();
 
-abstract class Action<TResult, TState> {
+abstract class ActionBase<TResult, TState> {
   late final Dispatcher dispatcher;
   final _doneEmitter = _Emitter();
   final _errorEmitter = _Emitter<Object>();
   final _successEmitter = _Emitter();
-  final _testState = <TState>[];
 
   var _dispatched = false;
 
-  Action() {
+  ActionBase() {
     on(error: onError, success: onSuccess, done: onDone);
   }
 
@@ -115,8 +115,10 @@ abstract class Action<TResult, TState> {
 
   TResult? get result => dispatcher.result as TResult;
 
+  @protected
   TState get state => cubix.state;
 
+  @protected
   set state(TState state) {
     if (cancelled) return;
     cubix.state = state;
@@ -124,21 +126,35 @@ abstract class Action<TResult, TState> {
 
   bool get success => done && error == null;
 
+  @protected
   Future<Map<TKey, Object?>> all<TKey>(Map<TKey, Object?> awatiable) {
     return _handleAwaitable(_AwaitType.all, awatiable);
   }
 
+  @protected
   Future<Map<TKey, Object?>> allSettled<TKey>(Map<TKey, Object?> awatiable) {
     return _handleAwaitable(_AwaitType.allSettled, awatiable);
   }
 
+  @protected
   TResult body();
 
   void cancel() => dispatcher.cancel();
 
+  bool canDispatch(Cubix cubix) {
+    return cubix._dispatchTest is List<TState>;
+  }
+
+  void selfDispatch(Cubix<TState> cubix) {
+    cubix.dispatch(this);
+  }
+
   // dispatch other action
-  TActionResult dispatch<TActionResult>(Action<TActionResult, TState> action,
-      {CancelToken? cancelToken}) {
+  @protected
+  TActionResult dispatch<TActionResult>(
+    ActionBase<TActionResult, TState> action, {
+    CancelToken? cancelToken,
+  }) {
     return cubix.dispatch(action, cancelToken: cancelToken);
   }
 
@@ -151,15 +167,18 @@ abstract class Action<TResult, TState> {
     if (error != null) _errorEmitter.on(error);
   }
 
+  @protected
   TResult onDispatch(Dispatcher dispatcher);
 
+  @protected
   void onDone() {}
 
+  @protected
   void onError(Object error) {}
 
-  void onInit(Dispatcher dispatcher) {
+  void onAttach(Dispatcher dispatcher) {
     if (_dispatched) {
-      throw Exception('Action is initialized');
+      throw Exception('Action is already dispatched');
     }
     _dispatched = true;
     this.dispatcher = dispatcher;
@@ -170,25 +189,23 @@ abstract class Action<TResult, TState> {
     );
   }
 
+  @protected
   void onResolve(DependencyResolver resolver) {}
 
+  @protected
   void onSuccess() {}
 
+  @protected
   Future<Map<TKey, Object?>> race<TKey>(Map<TKey, Object?> awatiable) {
     return _handleAwaitable(_AwaitType.race, awatiable);
   }
 
-  Future<Object?> wait() {
-    final completer = Completer<Object?>();
-    on(
-      success: () => completer.complete(dispatcher.result),
-      error: completer.completeError,
-    );
-    return completer.future;
-  }
+  Future<Object?> wait();
 
-  Future<Action> when(bool Function(Action action) predicate, {Cubix? cubix}) {
-    final completer = Completer<Action>();
+  @protected
+  Future<ActionBase> when(bool Function(ActionBase action) predicate,
+      {Cubix? cubix}) {
+    final completer = Completer<ActionBase>();
     cubix ??= this.cubix;
     VoidCallback? removeListener;
     removeListener = cubix.listen((action) {
@@ -203,7 +220,7 @@ abstract class Action<TResult, TState> {
 
   Future<Map<TKey, Object?>> _handleAwaitable<TKey>(
       _AwaitType type, Map<TKey, Object?> awatiable) {
-    final actions = <Action>[];
+    final actions = <ActionBase>[];
     final result = <TKey, Object?>{};
     final futures = <Future>[];
 
@@ -220,7 +237,7 @@ abstract class Action<TResult, TState> {
         // handle future object
         if (value is Future) {
           future = value;
-        } else if (value is Action) {
+        } else if (value is ActionBase) {
           actions.add(value);
           if (!value.dispatched) {
             cubix.dispatchGeneric(value);
@@ -269,15 +286,21 @@ abstract class Action<TResult, TState> {
 
     return completer.future;
   }
-
-  void _resolve(DependencyResolver resolver) {
-    onResolve(resolver);
-  }
 }
 
 abstract class AsyncAction<TResult, TState>
-    extends Action<Future<TResult>, TState> {
+    extends ActionBase<Future<TResult>, TState> {
   List<Rule> get rules => [];
+
+  @override
+  Future<TResult> wait() {
+    final completer = Completer<TResult>();
+    on(
+      success: () => completer.complete(dispatcher.result as TResult),
+      error: completer.completeError,
+    );
+    return completer.future;
+  }
 
   @override
   Future<TResult> onDispatch(Dispatcher dispatcher) {
@@ -376,6 +399,7 @@ class CubitWrapper<TState> extends Cubit<CubixState<TState>>
 abstract class Cubix<TState> implements IDependency {
   final CubitWrapper<TState> cubit;
   final _data = <Type, ActionData>{};
+  final _dispatchTest = <TState>[];
 
   Object? _key;
 
@@ -386,9 +410,31 @@ abstract class Cubix<TState> implements IDependency {
   var _disposed = false;
 
   final _disposeEmitter = _Emitter();
-  final _dispatchEmitter = _Emitter<Action>(false);
+  final _dispatchEmitter = _Emitter<ActionBase>(false);
 
   var _resolved = false;
+
+  List<Dispatcher> get dispatchers => cubit.state.dispatchers;
+
+  Future<TState> wait() {
+    final completer = Completer<TState>();
+
+    void listenDispatcherRemoved([Dispatcher? removed]) {
+      final remaining = dispatchers.whereNot((element) => element == removed);
+      if (remaining.isEmpty) {
+        completer.complete(state);
+      } else {
+        final last = remaining.last;
+        last.on(remove: () {
+          listenDispatcherRemoved(last);
+        });
+      }
+    }
+
+    listenDispatcherRemoved();
+
+    return completer.future;
+  }
 
   Cubix(TState initialState,
       [CubitWrapper<TState> Function(TState initialState)? create])
@@ -422,22 +468,26 @@ abstract class Cubix<TState> implements IDependency {
   @protected
   set state(TState state) => cubit.update(state: (prev) => state);
 
-  Dispatcher attachAction(Action action, {CancelToken? cancelToken}) {
+  Dispatcher attachAction(ActionBase action, {CancelToken? cancelToken}) {
+    if (!action.canDispatch(this)) {
+      throw IncompatibleException(
+          'Cannot dispatch this action. The Action is not compatible with this Cubix');
+    }
     var actionData = _data[action.runtimeType];
     if (actionData == null) {
       _data[action.runtimeType] = actionData = {};
     }
     if (_resolved) {
-      action._resolve(resolver);
+      action.onResolve(resolver);
     }
     final dispatcher = Dispatcher(
       cubix: this,
-      dispatching: cubit.state.dispatchers,
+      dispatching: dispatchers,
       cancelToken: cancelToken ?? CancelToken(),
       action: action,
       data: actionData,
     );
-    action.onInit(dispatcher);
+    action.onAttach(dispatcher);
     _dispatchEmitter.emit(action);
     onDispatch(action);
     return dispatcher;
@@ -445,27 +495,23 @@ abstract class Cubix<TState> implements IDependency {
 
   /// cancel all dispatching actions
   void cancel() {
-    if (cubit.state.dispatchers.isEmpty) return;
+    if (dispatchers.isEmpty) return;
     final prevState = cubit.update(dispatchers: []);
     for (final dispatcher in prevState.dispatchers) {
       dispatcher.cancel();
     }
   }
 
-  bool canDispatch(Action action) {
-    return action._testState is List<TState>;
-  }
-
   /// dispatch specified action and return the result of action body
   TResult dispatch<TResult extends Object?>(
-    Action<TResult, TState> action, {
+    ActionBase<TResult, TState> action, {
     CancelToken? cancelToken,
   }) {
     final dispatcher = attachAction(action, cancelToken: cancelToken);
     return action.onDispatch(dispatcher);
   }
 
-  void dispatchGeneric(Action action, {CancelToken? cancelToken}) {
+  void dispatchGeneric(ActionBase action, {CancelToken? cancelToken}) {
     final dispatcher = attachAction(action, cancelToken: cancelToken);
     action.onDispatch(dispatcher);
   }
@@ -478,7 +524,7 @@ abstract class Cubix<TState> implements IDependency {
     _disposeEmitter.emit(null);
   }
 
-  VoidCallback listen(void Function(Action action) callback) {
+  VoidCallback listen(void Function(ActionBase action) callback) {
     var active = true;
     _dispatchEmitter.on(callback);
     return () {
@@ -494,24 +540,24 @@ abstract class Cubix<TState> implements IDependency {
   ///   cubix.loading<ActionType>()
   ///   cubix.loading((action) => action is ActionType1 || action is ActionType2 || action.prop == something);
   /// ```
-  bool loading<TAction extends Object?>([bool Function(Action)? predicate]) {
+  bool loading<TAction extends Object?>(
+      [bool Function(ActionBase)? predicate]) {
     // using predicate to check action is dispatching or not
     if (predicate != null) {
-      return cubit.state.dispatchers
-          .any((element) => predicate(element.action));
+      return dispatchers.any((element) => predicate(element.action));
     }
     // no action type
     if (null is TAction) {
-      return cubit.state.dispatchers.isNotEmpty;
+      return dispatchers.isNotEmpty;
     }
     // with action type
-    return cubit.state.dispatchers.any((element) => element.action is TAction);
+    return dispatchers.any((element) => element.action is TAction);
   }
 
   void onChange(Change<TState> change) {}
 
   /// this method will be called whenever action dispatches
-  void onDispatch(Action action) {}
+  void onDispatch(ActionBase action) {}
 
   void onError(Object error, StackTrace stackTrace) {}
 
@@ -602,6 +648,8 @@ mixin CubixMixin<TState> {
     return prevState;
   }
 }
+
+// final _completedFuture = Future.value(null);
 
 class CubixState<TState> {
   final TState state;
@@ -705,7 +753,7 @@ class Dispatcher {
   final ActionData data;
 
   /// dispatching action object
-  final Action action;
+  final ActionBase action;
 
   final Cubix cubix;
   final _doneEmitter = _Emitter();
@@ -801,6 +849,12 @@ abstract class IDependency {
   void resolve(DependencyResolver resolver, {Object? key, Type? resolvedType});
 }
 
+class IncompatibleException with Exception {
+  final String message;
+
+  IncompatibleException(this.message);
+}
+
 class InitContext {
   final cancelToken = CancelToken();
 
@@ -825,7 +879,15 @@ class ResolveContext {
   }
 }
 
-abstract class SyncAction<TResult, TState> extends Action<TResult, TState> {
+abstract class SyncAction<TResult, TState> extends ActionBase<TResult, TState> {
+  @override
+  Future<TResult> wait() {
+    if (dispatcher.error != null) {
+      return Future.error(dispatcher.error!);
+    }
+    return Future.value(dispatcher.result as TResult);
+  }
+
   @override
   TResult onDispatch(Dispatcher dispatcher) {
     try {
@@ -841,6 +903,12 @@ abstract class SyncAction<TResult, TState> extends Action<TResult, TState> {
       rethrow;
     }
   }
+}
+
+abstract class VoidAction<TState extends Object?>
+    extends SyncAction<void, TState> {
+  @override
+  void body() {}
 }
 
 enum _AwaitType { race, all, allSettled }
@@ -911,10 +979,11 @@ class _SyncConfigs {
 }
 
 extension DependencyResolverExtension on DependencyResolver {
-  void broadcast(Action Function() actionCreator, {CancelToken? cancelToken}) {
+  void broadcast(ActionBase Function() actionCreator,
+      {CancelToken? cancelToken}) {
     final testAction = actionCreator();
     walk((dependency) {
-      if (dependency is Cubix && dependency.canDispatch(testAction)) {
+      if (dependency is Cubix && testAction.canDispatch(dependency)) {
         dependency.dispatchGeneric(actionCreator(), cancelToken: cancelToken);
       }
       return true;

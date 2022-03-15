@@ -169,8 +169,32 @@ void main() {
           () => result += 4,
         ));
     resolver.broadcast(() => TestAction<int?>());
-    expect(result, 5);
+    expect(result, 1);
   });
+
+  test('canDispatch #1', () {
+    final cubix = DynamicCubix();
+    expect(() => cubix.dispatch(IncrementAction()),
+        throwsA(isA<IncompatibleException>()));
+  });
+
+  test('cubix.wait()', () async {
+    final cubix = TestCubix();
+    cubix.dispatch(IncrementAsyncAction(const Duration(milliseconds: 10)));
+    cubix.dispatch(IncrementAsyncAction(const Duration(milliseconds: 15)));
+    cubix.dispatch(IncrementAsyncAction(const Duration(milliseconds: 30)));
+    expect(cubix.loading(), true);
+    final state = await cubix.wait();
+    expect(state, 3);
+  });
+}
+
+class DynamicCubix extends Cubix<Object?> {
+  DynamicCubix() : super(null);
+}
+
+class NumberCubix extends Cubix<num?> {
+  NumberCubix() : super(0);
 }
 
 class WhenAction extends AsyncAction<void, int> {
@@ -196,7 +220,7 @@ class BroadcastingCubix<T> extends Cubix<T> {
   BroadcastingCubix(T initialState, this.callback) : super(initialState);
 
   @override
-  void onDispatch(Action action) {
+  void onDispatch(ActionBase action) {
     callback();
   }
 }
@@ -310,6 +334,18 @@ abstract class HydratedCubix<TState> extends Cubix<TState> {
 class IncrementAction extends SyncAction<void, int> {
   @override
   body() => state++;
+}
+
+class IncrementAsyncAction extends AsyncAction<void, int> {
+  final Duration delay;
+
+  IncrementAsyncAction(this.delay);
+
+  @override
+  body() async {
+    await Future.delayed(delay);
+    state++;
+  }
 }
 
 class SequentialAction extends AsyncAction<void, int> {

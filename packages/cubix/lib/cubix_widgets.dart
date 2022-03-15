@@ -149,7 +149,8 @@ extension BuildContextExtension on BuildContext {
     );
   }
 
-  void broadcast(Action Function() actionCreator, {CancelToken? cancelToken}) {
+  void broadcast(ActionBase Function() actionCreator,
+      {CancelToken? cancelToken}) {
     resolver.broadcast(actionCreator, cancelToken: cancelToken);
   }
 }
