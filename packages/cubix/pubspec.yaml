@@ -1,6 +1,6 @@
 name: cubix
 description: A predictable state management library that based on BLoc library. Easy to use and maintenance.
-version: 0.1.4+3
+version: 0.1.4+4
 homepage: https://github.com/linq2js/flutter_cubix
 repository: https://github.com/linq2js/flutter_cubix
 

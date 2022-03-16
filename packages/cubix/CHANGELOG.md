@@ -1,3 +1,7 @@
+## 0.1.4+4
+
+ - **REFACTOR**: dependeny resolving.
+
 ## 0.1.4+3
 
  - **REFACTOR**: remove Cubiw widget.
