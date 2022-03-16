@@ -280,7 +280,7 @@ print(result); // the result is Future<bool> because action is AsyncAction, so t
 print(action.done); // false
 print(action.error); // null
 print(action.success); // false
-action.cancel(); // cancel dispatching
+action.cancel(); // cancel action dispatching
 print(action.cancelled); // true
 // after cancel the action, the result object is running forever
 await result;
