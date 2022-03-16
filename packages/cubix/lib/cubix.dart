@@ -99,6 +99,8 @@ abstract class ActionBase<TResult, TState> {
 
   var _dispatched = false;
 
+  _ResolveContext? _resolveContext;
+
   ActionBase() {
     on(error: onError, success: onSuccess, done: onDone);
   }
@@ -186,7 +188,7 @@ abstract class ActionBase<TResult, TState> {
   void onError(Object error) {}
 
   @protected
-  void onResolve(DependencyResolver resolver) {}
+  void onResolve() {}
 
   @protected
   void onSuccess() {}
@@ -196,12 +198,28 @@ abstract class ActionBase<TResult, TState> {
     return _handleAwaitable(_AwaitType.race, awatiable);
   }
 
+  T resolve<T extends IDependency>(T Function() create, {Object? family}) {
+    return _getResolveContext().resolve(create, family: family);
+  }
+
+  void resolvedBy(DependencyResolver resolver) {
+    _resolveContext = _ResolveContext(cubix, resolver);
+    onResolve();
+  }
+
   void selfDispatch(Cubix<TState> cubix, {CancelToken? cancelToken}) {
     cubix.dispatch(this, cancelToken: cancelToken);
   }
 
   /// wait until action dispatching is completed
   Future<Object?> wait();
+
+  VoidCallback watch(
+    List<Cubix> cubixes,
+    void Function(CancelToken cancelToken) syncFn,
+  ) {
+    return _getResolveContext().watch(cubixes, syncFn);
+  }
 
   @protected
   Future<ActionBase> when(bool Function(ActionBase action) predicate,
@@ -217,6 +235,14 @@ abstract class ActionBase<TResult, TState> {
     });
     dispatcher.on(detach: removeListener);
     return completer.future;
+  }
+
+  _ResolveContext _getResolveContext() {
+    if (_resolveContext == null) {
+      throw Exception(
+          'No DependencyResolve available. Must run resolvedBy first');
+    }
+    return _resolveContext!;
   }
 
   Future<Map<TKey, Object?>> _handleAwaitable<TKey>(
@@ -419,7 +445,7 @@ class CubitWrapper<TState> extends Cubit<CubixState<TState>>
   }
 }
 
-abstract class Cubix<TState> implements IDependency {
+abstract class Cubix<TState> extends Dependency {
   final CubitWrapper<TState> cubit;
   final _data = <Type, ActionData>{};
   final _dispatchTest = <TState>[];
@@ -428,13 +454,9 @@ abstract class Cubix<TState> implements IDependency {
   final _dispatchEmitter = _Emitter<ActionBase>(false);
 
   var _disposed = false;
-  var _resolved = false;
 
   Object? _error;
-  Object? _key;
-  DependencyResolver? _resolver;
-  Type? _resolvedType;
-  ResolveContext? _resolveContext;
+  _ResolveContext? _resolveContext;
 
   var _noDispatcherEmitter = _Emitter()..emit(null);
 
@@ -463,13 +485,6 @@ abstract class Cubix<TState> implements IDependency {
   @override
   Type get resolvedType => _resolvedType ?? runtimeType;
 
-  DependencyResolver get resolver {
-    if (_resolver == null) {
-      throw Exception('resolve() method has not been called');
-    }
-    return _resolver!;
-  }
-
   // get state
   TState get state => cubit.state.state;
 
@@ -486,9 +501,7 @@ abstract class Cubix<TState> implements IDependency {
     if (actionData == null) {
       _data[action.runtimeType] = actionData = {};
     }
-    if (_resolved) {
-      action.onResolve(resolver);
-    }
+
     final dispatcher = Dispatcher(
       cubix: this,
       dispatching: dispatchers,
@@ -497,6 +510,12 @@ abstract class Cubix<TState> implements IDependency {
       data: actionData,
     );
     action.onAttach(dispatcher);
+
+    if (_resolved) {
+      action.resolvedBy(resolver);
+      action.onResolve();
+    }
+
     _dispatchEmitter.emit(action);
     onDispatch(action);
     return dispatcher;
@@ -586,24 +605,23 @@ abstract class Cubix<TState> implements IDependency {
 
   void onError(Object error, StackTrace stackTrace) {}
 
-  /// when cubix is resolved, this method will be called to make sure all cubix dependencies are resolved
-  void onResolve(ResolveContext context) {}
-
   void remove() {
     resolver.remove(this);
     dispose();
   }
 
+  T resolve<T extends IDependency>(T Function() create, {Object? family}) {
+    return _getResolveContext().resolve(create, family: family);
+  }
+
   @override
-  void resolve(DependencyResolver resolver, {Object? key, Type? resolvedType}) {
-    if (_resolved) {
-      throw Exception('resolve() method can be called once');
-    }
-    _resolved = true;
-    _key = key;
-    _resolvedType = resolvedType ?? runtimeType;
-    _resolver = resolver;
-    onResolve(_resolveContext = ResolveContext(this, resolver));
+  void resolvedBy(
+    DependencyResolver resolver, {
+    Object? key,
+    Type? resolvedType,
+  }) {
+    _resolveContext = _ResolveContext(this, resolver);
+    super.resolvedBy(resolver, key: key, resolvedType: resolvedType);
   }
 
   Future<TState> wait() {
@@ -612,6 +630,21 @@ abstract class Cubix<TState> implements IDependency {
     _noDispatcherEmitter.on(() => completer.complete(state));
 
     return completer.future;
+  }
+
+  VoidCallback watch(
+    List<Cubix> cubixes,
+    void Function(CancelToken cancelToken) syncFn,
+  ) {
+    return _getResolveContext().watch(cubixes, syncFn);
+  }
+
+  _ResolveContext _getResolveContext() {
+    if (_resolveContext == null) {
+      throw Exception(
+          'No DependencyResolve available. Must run resolvedBy first');
+    }
+    return _resolveContext!;
   }
 }
 
@@ -695,6 +728,45 @@ class CubixState<TState> {
   }
 }
 
+abstract class Dependency implements IDependency {
+  bool _resolved = false;
+  Object? _key;
+  late Type? _resolvedType;
+
+  DependencyResolver? _resolver;
+
+  @override
+  Object? get key => _key;
+
+  @override
+  Type get resolvedType => _resolvedType ?? runtimeType;
+
+  DependencyResolver get resolver {
+    if (_resolver == null) {
+      throw Exception('resolve() method has not been called');
+    }
+    return _resolver!;
+  }
+
+  @override
+  void dispose() {}
+
+  void onResolve() {}
+
+  @override
+  void resolvedBy(DependencyResolver resolver,
+      {Object? key, Type? resolvedType}) {
+    if (_resolved) {
+      throw Exception('resolve() method can be called once');
+    }
+    _resolved = true;
+    _key = key;
+    _resolvedType = resolvedType ?? runtimeType;
+    _resolver = resolver;
+    onResolve();
+  }
+}
+
 class DependencyResolver {
   final _dependencies = <Type, Map<Object?, IDependency>>{};
 
@@ -718,7 +790,7 @@ class DependencyResolver {
     if (dependency != null) return dependency;
     dependency = create();
     collection[family] = dependency;
-    dependency.resolve(this, key: family, resolvedType: T);
+    dependency.resolvedBy(this, key: family, resolvedType: T);
     return dependency;
   }
 
@@ -850,7 +922,8 @@ abstract class IDependency {
   Type get resolvedType;
 
   void dispose();
-  void resolve(DependencyResolver resolver, {Object? key, Type? resolvedType});
+  void resolvedBy(DependencyResolver resolver,
+      {Object? key, Type? resolvedType});
 }
 
 class IncompatibleException with Exception {
@@ -865,52 +938,6 @@ class InitContext {
   InitContext();
 
   void cancel() => cancelToken.cancel();
-}
-
-class ResolveContext {
-  final DependencyResolver _resolver;
-  final Cubix _cubix;
-  final _removeSyncCallbacks = CallbackGroup();
-
-  ResolveContext(this._cubix, this._resolver);
-
-  void dispose() {
-    _removeSyncCallbacks.call();
-  }
-
-  T resolve<T extends Cubix>(CreateCubix<T> create, {Object? family}) {
-    return _resolver.resolve(create, family: family);
-  }
-
-  VoidCallback sync(
-    List<Cubix> dependencies,
-    void Function(CancelToken cancelToken) syncFn,
-  ) {
-    final removeSyncCallback = CallbackGroup();
-    CancelToken? lastToken;
-
-    removeSyncCallback.add(() {
-      lastToken?.cancel();
-      _removeSyncCallbacks.remove(removeSyncCallback.call);
-    });
-
-    void handleChange() {
-      if (_cubix.disposed) return;
-      lastToken?.cancel();
-      syncFn(lastToken = CancelToken());
-    }
-
-    for (final cubix in dependencies) {
-      final subscription = cubix.cubit.stream.listen((event) => handleChange());
-      removeSyncCallback.add(subscription.cancel);
-    }
-
-    handleChange();
-
-    _removeSyncCallbacks.add(removeSyncCallback.call);
-
-    return removeSyncCallback.call;
-  }
 }
 
 abstract class SyncAction<TResult, TState> extends ActionBase<TResult, TState> {
@@ -1011,6 +1038,52 @@ class _Emitter<T extends Object?> {
 }
 
 enum _Props { throttleLastExecutionTime }
+
+class _ResolveContext {
+  final DependencyResolver _resolver;
+  final Cubix _cubix;
+  final _removeSyncCallbacks = CallbackGroup();
+
+  _ResolveContext(this._cubix, this._resolver);
+
+  void dispose() {
+    _removeSyncCallbacks.call();
+  }
+
+  T resolve<T extends IDependency>(T Function() create, {Object? family}) {
+    return _resolver.resolve(create, family: family);
+  }
+
+  VoidCallback watch(
+    List<Cubix> cubixes,
+    void Function(CancelToken cancelToken) syncFn,
+  ) {
+    final removeSyncCallback = CallbackGroup();
+    CancelToken? lastToken;
+
+    removeSyncCallback.add(() {
+      lastToken?.cancel();
+      _removeSyncCallbacks.remove(removeSyncCallback.call);
+    });
+
+    void handleChange() {
+      if (_cubix.disposed) return;
+      lastToken?.cancel();
+      syncFn(lastToken = CancelToken());
+    }
+
+    for (final cubix in cubixes) {
+      final subscription = cubix.cubit.stream.listen((event) => handleChange());
+      removeSyncCallback.add(subscription.cancel);
+    }
+
+    handleChange();
+
+    _removeSyncCallbacks.add(removeSyncCallback.call);
+
+    return removeSyncCallback.call;
+  }
+}
 
 extension DependencyResolverExtension on DependencyResolver {
   void broadcast(ActionBase Function() actionCreator,

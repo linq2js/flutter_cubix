@@ -98,8 +98,8 @@ class ArticleListCubix extends Cubix<List<Article>> {
     ArticleListCubix(): super([]);
 
     @override
-    onResolve(context) async {
-        final user$ = context.resolve(UserCubix.new);
+    onResolve() async {
+        final user$ = resolve(UserCubix.new);
         state = await LoadArticleByUser(user$.state.id);
     };
 }
@@ -120,11 +120,11 @@ class SumCubix extends Cubix<int> {
     SumCubix(): super(0);
 
     @override
-    onResolve(context) {
-        final a$ = context.resolve(ACubix.new);
-        final b$ = context.resolve(BCubix.new);
+    onResolve() {
+        final a$ = resolve(ACubix.new);
+        final b$ = resolve(BCubix.new);
 
-        context.sync([a$, b$], (cancelToken) {
+        sync([a$, b$], (cancelToken) {
           state = a$.state + b$.state;
         });
     }

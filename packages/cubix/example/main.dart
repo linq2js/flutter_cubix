@@ -11,7 +11,7 @@ class CounterCubix extends Cubix<int> {
 
   @override
   onDispatch(ActionBase action) {
-    // tracking action dispatching
+    // log an action dispatching
     // cannot track method base actions (increment)
     // ignore: avoid_print
     print(action.runtimeType.toString());
@@ -54,28 +54,33 @@ class App extends StatelessWidget {
   @override
   build(context) {
     return CubixProvider(
-        // build widget from CounterCubix
-        // the builder receives BuildContext and Cubix objects
-        child: CounterCubix.new.build((context, cubix) {
-      return Column(children: [
-        // getting state of cubix
-        Text(cubix.state.toString()),
-        ElevatedButton(
-          // resolve cubix from context object
-          onPressed: context.cubix(CounterCubix.new).increment,
-          child: const Text('Increment'),
-        ),
-        ElevatedButton(
-          // dispatch class base action
-          onPressed: () => cubix.dispatch(DecrementAction()),
-          child: const Text('Decrement'),
-        ),
-        ElevatedButton(
-          // dispatch class base action with args
-          onPressed: () => cubix.dispatch(DecrementAsyncAction(2)),
-          child: const Text('Decrement Async'),
-        )
-      ]);
-    }));
+      // build widget from CounterCubix
+      // the builder receives BuildContext and Cubix objects
+      child: CounterCubix.new.build(
+        (context, cubix) {
+          return Column(
+            children: [
+              // getting state of cubix
+              Text(cubix.state.toString()),
+              ElevatedButton(
+                // resolve cubix from context object
+                onPressed: context.cubix(CounterCubix.new).increment,
+                child: const Text('Increment'),
+              ),
+              ElevatedButton(
+                // dispatch class base action
+                onPressed: () => cubix.dispatch(DecrementAction()),
+                child: const Text('Decrement'),
+              ),
+              ElevatedButton(
+                // dispatch class base action with args
+                onPressed: () => cubix.dispatch(DecrementAsyncAction(2)),
+                child: const Text('Decrement Async'),
+              )
+            ],
+          );
+        },
+      ),
+    );
   }
 }

@@ -49,7 +49,7 @@ void main() {
   test('sync #1', () async {
     final testCubix = TestCubix();
     final resolver = DependencyResolver()..add(testCubix);
-    final doubleCubix = DoubleCubix()..resolve(resolver);
+    final doubleCubix = DoubleCubix()..resolvedBy(resolver);
     expect(doubleCubix.state, 0);
     testCubix.dispatch(IncrementAction());
     await Future.delayed(Duration.zero);
@@ -58,7 +58,7 @@ void main() {
 
   test('sync #2', () async {
     final resolver = DependencyResolver();
-    final doubleCubix = DoubleCubix()..resolve(resolver);
+    final doubleCubix = DoubleCubix()..resolvedBy(resolver);
     expect(doubleCubix.state, 0);
   });
 
@@ -187,47 +187,28 @@ void main() {
     final state = await cubix.wait();
     expect(state, 3);
   });
+
+  test('action with dependency', () {
+    final resolver = DependencyResolver();
+    final cubix = TestCubix()..resolvedBy(resolver);
+    cubix.dispatch(ActionWithDependency());
+    expect(cubix.state, 2);
+  });
 }
 
-class DynamicCubix extends Cubix<Object?> {
-  DynamicCubix() : super(null);
-}
+class ActionWithDependency extends SyncAction<void, int> {
+  late SettingCubix settings$;
 
-class NumberCubix extends Cubix<num?> {
-  NumberCubix() : super(0);
-}
-
-class WhenAction extends AsyncAction<void, int> {
   @override
-  body() async {
-    await when((action) => action is IncrementAction);
+  body() {
+    state = settings$.state + 1;
   }
-}
-
-class RaceAction extends AsyncAction<Map<Object, Object?>, int> {
-  final Map<Object, Object?> awaitable;
-
-  RaceAction(this.awaitable);
 
   @override
-  body() async {
-    return await race(awaitable);
+  void onResolve() {
+    super.onResolve();
+    settings$ = resolve(SettingCubix.new);
   }
-}
-
-class BroadcastingCubix<T> extends Cubix<T> {
-  final VoidCallback callback;
-  BroadcastingCubix(T initialState, this.callback) : super(initialState);
-
-  @override
-  void onDispatch(ActionBase action) {
-    callback();
-  }
-}
-
-class TestAction<T> extends SyncAction<void, T> {
-  @override
-  body() {}
 }
 
 class AllAction extends AsyncAction<Map<Object, Object?>, int> {
@@ -252,16 +233,13 @@ class AllSettledAction extends AsyncAction<Map<Object, Object?>, int> {
   }
 }
 
-class ValuedAsyncAction extends AsyncAction<int, int> {
-  final int value;
-  final Duration delay;
-
-  ValuedAsyncAction(this.value, this.delay);
+class BroadcastingCubix<T> extends Cubix<T> {
+  final VoidCallback callback;
+  BroadcastingCubix(T initialState, this.callback) : super(initialState);
 
   @override
-  body() async {
-    await Future.delayed(delay);
-    return value;
+  void onDispatch(ActionBase action) {
+    callback();
   }
 }
 
@@ -279,11 +257,14 @@ class DoubleCubix extends HydratedCubix<int> {
   DoubleCubix() : super(0);
 
   @override
-  void onResolve(context) {
-    final testCubix = context.resolve(TestCubix.new);
-
-    context.sync([testCubix], (_) => state = testCubix.state * 2);
+  void onResolve() {
+    final testCubix = resolve(TestCubix.new);
+    watch([testCubix], (_) => state = testCubix.state * 2);
   }
+}
+
+class DynamicCubix extends Cubix<Object?> {
+  DynamicCubix() : super(null);
 }
 
 class HydratedCubitWrapper<TState> extends HydratedCubit<CubixState<TState>>
@@ -340,6 +321,21 @@ class IncrementAsyncAction extends AsyncAction<void, int> {
   }
 }
 
+class NumberCubix extends Cubix<num?> {
+  NumberCubix() : super(0);
+}
+
+class RaceAction extends AsyncAction<Map<Object, Object?>, int> {
+  final Map<Object, Object?> awaitable;
+
+  RaceAction(this.awaitable);
+
+  @override
+  body() async {
+    return await race(awaitable);
+  }
+}
+
 class SequentialAction extends AsyncAction<void, int> {
   @override
   get rules => [sequential()];
@@ -349,6 +345,15 @@ class SequentialAction extends AsyncAction<void, int> {
     await Future.delayed(const Duration(milliseconds: 10));
     state++;
   }
+}
+
+class SettingCubix extends Cubix<int> {
+  SettingCubix() : super(1);
+}
+
+class TestAction<T> extends SyncAction<void, T> {
+  @override
+  body() {}
 }
 
 class TestCubix extends Cubix<int> {
@@ -362,5 +367,25 @@ class ThrottleAction extends AsyncAction<void, int> {
   @override
   body() async {
     state++;
+  }
+}
+
+class ValuedAsyncAction extends AsyncAction<int, int> {
+  final int value;
+  final Duration delay;
+
+  ValuedAsyncAction(this.value, this.delay);
+
+  @override
+  body() async {
+    await Future.delayed(delay);
+    return value;
+  }
+}
+
+class WhenAction extends AsyncAction<void, int> {
+  @override
+  body() async {
+    await when((action) => action is IncrementAction);
   }
 }
