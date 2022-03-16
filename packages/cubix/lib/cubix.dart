@@ -65,7 +65,7 @@ Rule sequential() {
     if (last == null) {
       next();
     } else {
-      last.on(detach: next);
+      last.on(dispose: next);
     }
   };
 }
@@ -96,13 +96,19 @@ abstract class ActionBase<TResult, TState> {
   final _doneEmitter = _Emitter();
   final _errorEmitter = _Emitter<Object>();
   final _successEmitter = _Emitter();
+  final _disposeEmitter = _Emitter();
 
   var _dispatched = false;
 
   _ResolveContext? _resolveContext;
 
   ActionBase() {
-    on(error: onError, success: onSuccess, done: onDone);
+    on(
+      error: onError,
+      success: onSuccess,
+      done: onDone,
+      dispose: dispose,
+    );
   }
 
   bool get cancelled => dispatcher.cancelled;
@@ -156,12 +162,19 @@ abstract class ActionBase<TResult, TState> {
     return cubix.dispatch(action, cancelToken: cancelToken);
   }
 
+  @protected
+  void dispose() {
+    _resolveContext?.dispose();
+  }
+
   void on(
       {VoidCallback? done,
       VoidCallback? success,
+      VoidCallback? dispose,
       void Function(Object)? error}) {
     if (done != null) _doneEmitter.on(done);
     if (success != null) _successEmitter.on(success);
+    if (dispose != null) _disposeEmitter.on(dispose);
     if (error != null) _errorEmitter.on(error);
   }
 
@@ -175,6 +188,7 @@ abstract class ActionBase<TResult, TState> {
       done: () => _doneEmitter.emit(null),
       success: () => _successEmitter.emit(null),
       error: (e) => _errorEmitter.emit(e),
+      dispose: () => _disposeEmitter.emit(null),
     );
   }
 
@@ -214,26 +228,32 @@ abstract class ActionBase<TResult, TState> {
   /// wait until action dispatching is completed
   Future<Object?> wait();
 
-  VoidCallback watch(
-    List<Cubix> cubixes,
-    void Function(CancelToken cancelToken) syncFn,
-  ) {
-    return _getResolveContext().watch(cubixes, syncFn);
+  /// watch changes of cubixes, unlikely cubix.watch(), this method returns a future object that is completed when given cubixes are changed
+  Future<void> watch(List<Cubix> cubixes) {
+    final completer = Completer<void>();
+    VoidCallback? removeWatcher;
+    removeWatcher = _getResolveContext().watch(cubixes, (_) {
+      removeWatcher?.call();
+      if (cancelled) return;
+      completer.complete(null);
+    });
+    return completer.future;
   }
 
+  /// this method returns a future object that is completed when the dispatching action is satisfied the given predicate
   @protected
   Future<ActionBase> when(bool Function(ActionBase action) predicate,
       {Cubix? cubix}) {
     final completer = Completer<ActionBase>();
     cubix ??= this.cubix;
     VoidCallback? removeListener;
-    removeListener = cubix.listen((action) {
+    removeListener = cubix.when((action) {
       if (predicate(action)) {
         removeListener?.call();
         completer.complete(action);
       }
     });
-    dispatcher.on(detach: removeListener);
+    dispatcher.on(dispose: removeListener);
     return completer.future;
   }
 
@@ -524,7 +544,7 @@ abstract class Cubix<TState> extends Dependency {
   void attachDispatcher(Dispatcher dispatcher) {
     dispatcher.on(end: () {
       cubit.update(remove: dispatcher);
-      dispatcher.onDetach();
+      dispatcher.dispose();
       if (dispatchers.isEmpty) {
         _noDispatcherEmitter.emit(null);
       }
@@ -541,7 +561,7 @@ abstract class Cubix<TState> extends Dependency {
     final prevState = cubit.update(dispatchers: []);
     for (final dispatcher in prevState.dispatchers) {
       dispatcher.cancel();
-      dispatcher.onDetach();
+      dispatcher.dispose();
     }
     _noDispatcherEmitter.emit(null);
   }
@@ -566,16 +586,6 @@ abstract class Cubix<TState> extends Dependency {
     _disposed = true;
     _resolveContext?.dispose();
     _disposeEmitter.emit(null);
-  }
-
-  VoidCallback listen(void Function(ActionBase action) callback) {
-    var active = true;
-    _dispatchEmitter.on(callback);
-    return () {
-      if (!active) return;
-      active = false;
-      _dispatchEmitter.off(callback);
-    };
   }
 
   /// return true if there is any action dispatching
@@ -637,6 +647,16 @@ abstract class Cubix<TState> extends Dependency {
     void Function(CancelToken cancelToken) syncFn,
   ) {
     return _getResolveContext().watch(cubixes, syncFn);
+  }
+
+  VoidCallback when(void Function(ActionBase action) callback) {
+    var active = true;
+    _dispatchEmitter.on(callback);
+    return () {
+      if (!active) return;
+      active = false;
+      _dispatchEmitter.off(callback);
+    };
   }
 
   _ResolveContext _getResolveContext() {
@@ -832,11 +852,10 @@ class Dispatcher {
   final _doneEmitter = _Emitter();
   final _errorEmitter = _Emitter<Object>();
   final _successEmitter = _Emitter();
-  final _detachEmitter = _Emitter();
+  final _disposeEmitter = _Emitter();
 
   var _done = false;
   var _disposed = false;
-  var _detached = false;
   var _cancelled = false;
 
   Object? _error;
@@ -868,10 +887,11 @@ class Dispatcher {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _disposeEmitter.emit(null);
     _doneEmitter.clear();
     _successEmitter.clear();
     _errorEmitter.clear();
-    _detachEmitter.clear();
+    _disposeEmitter.clear();
   }
 
   void on({
@@ -879,7 +899,7 @@ class Dispatcher {
     VoidCallback? end,
     VoidCallback? done,
     VoidCallback? cancel,
-    VoidCallback? detach,
+    VoidCallback? dispose,
     void Function(Object)? error,
   }) {
     if (success != null) _successEmitter.on(success);
@@ -889,15 +909,8 @@ class Dispatcher {
     }
     if (success != null) _successEmitter.on(success);
     if (error != null) _errorEmitter.on(error);
-    if (detach != null) _detachEmitter.on(detach);
+    if (dispose != null) _disposeEmitter.on(dispose);
     if (done != null) _doneEmitter.on(done);
-  }
-
-  void onDetach() {
-    if (_detached) return;
-    _detached = true;
-    _detachEmitter.emit(null);
-    dispose();
   }
 
   void onDone(Object? error, Object? result) {
@@ -971,6 +984,14 @@ abstract class VoidAction<TState extends Object?>
   @override
   void body() {}
 }
+
+abstract class VoidAsyncAction<TState> extends AsyncAction<void, TState> {}
+
+abstract class VoidCubix extends Cubix<void> {
+  VoidCubix() : super(null);
+}
+
+abstract class VoidSyncAction<TState> extends SyncAction<void, TState> {}
 
 enum _AwaitType { race, all, allSettled }
 

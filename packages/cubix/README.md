@@ -124,7 +124,11 @@ class SumCubix extends Cubix<int> {
         final a$ = resolve(ACubix.new);
         final b$ = resolve(BCubix.new);
 
-        sync([a$, b$], (cancelToken) {
+        // can invoke dependency cubix method
+        a$.doSomething();
+        b$.doSomething();
+
+        watch([a$, b$], (cancelToken) {
           state = a$.state + b$.state;
         });
     }
@@ -149,7 +153,7 @@ class UserCubix extends Cubix<User> {
     // at begining time, cubix has an AnonymousUser state
     UserCubix(): super(AnonymousUser()) {
       // listen logout
-      listen((action) {
+      when((action) {
           // when action logout is dispatched
           if (action is LogoutAction) {
               // change current user to anonymous
@@ -210,4 +214,74 @@ cubix.dispatch(IncrementAsyncAction()..on(
     error: () => print('something went wrong'),
     done: () => print('action dispatched')
 ));
+```
+
+### Watching cubix state changing
+
+There are two ways for watching cubix state changing: in cubix class and in cubix action
+
+```dart
+class RootCubix extends VoidCubix {
+  RootCubix(): super(0);
+
+  @override
+  onResolve() {
+    final counter$ = resolve(CounterCubix.new);
+
+    // watch counter cubix's state changing
+    final removeWatcher = watch([counter$], (cancelToken) {
+      print(counter$.state);
+    });
+  }
+}
+
+class CounterCubix extends Cubix<int> {
+  CounterCubix(): super(0);
+}
+
+class CounterWatcherAction extends VoidAsyncAction<void> {
+  @override
+  body() async {
+    final counter$ = resolve(CounterCubix.new);
+
+    while(true) {
+      // unlikely cubix.watch(), action.watch() returns future object
+      await watch([counter$]);
+      print(counter$.state);
+      // continue watching
+    }
+  }
+}
+```
+
+### Understanding Action object
+
+```dart
+typedef MyCubixState = int;
+typedef MyActionResult = bool;
+
+class MyCubix extends Cubix<MyCubixState> {
+  MyCubix(): super(0);
+}
+
+class MyAction extends AsyncAction<MyActionResult, MyCubixState> {
+  @override
+  body() async {
+    await Future.delayed(const Duration(seconds: 5));
+    return true;
+  }
+}
+
+// dispatching action
+final action = MyAction(); // at this time, the action is not attached, no dispatcher created
+final result = cubix.dispatch(action); // the action is attached, the dispatcher is created and working
+print(result); // the result is Future<bool> because action is AsyncAction, so the result must be Future type of MyActionResult (bool)
+// when action is attached, we can invoke some methods to control action dispatching and access some properties to receive dispatching status
+print(action.done); // false
+print(action.error); // null
+print(action.success); // false
+action.cancel(); // cancel dispatching
+print(action.cancelled); // true
+// after cancel the action, the result object is running forever
+await result;
 ```
