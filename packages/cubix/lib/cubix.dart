@@ -591,6 +591,7 @@ abstract class Cubix<TState> implements IDependency {
 
   void remove() {
     resolver.remove(this);
+    dispose();
   }
 
   @override

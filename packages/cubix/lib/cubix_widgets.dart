@@ -3,45 +3,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 
 import 'cubix.dart';
 
-class Cubiw<TCubix extends Cubix> extends CubiwBase<TCubix> {
-  final Widget Function(BuildContext context, TCubix cubix) builder;
+class Cubiw {
+  final Object? family;
 
-  const Cubiw(TCubix Function() create, this.builder, {Key? key})
-      : super(create, key: key);
-
-  @override
-  Widget build(BuildContext context, TCubix cubix) {
-    return builder(context, cubix);
-  }
-
-  @override
-  State<StatefulWidget> createState() {
-    return CubiwBaseState<TCubix>();
-  }
-}
-
-abstract class CubiwBase<TCubix extends Cubix> extends StatefulWidget {
-  final TCubix Function() create;
-
-  const CubiwBase(this.create, {Key? key}) : super(key: key);
-
-  @protected
-  Widget build(BuildContext context, TCubix cubix);
-
-  @override
-  State<StatefulWidget> createState() {
-    return CubiwBaseState<TCubix>();
-  }
-}
-
-class CubiwBaseState<TCubix extends Cubix> extends State<CubiwBase<TCubix>> {
-  final Object _defaultKey = Object();
-
-  @override
-  Widget build(BuildContext context) {
-    final family = widget.key ?? _defaultKey;
-    return widget.create.build(widget.build, family: family, transient: true);
-  }
+  Cubiw([this.family]);
 }
 
 class CubixBuilder<TCubix extends Cubix> extends StatefulWidget {
@@ -71,17 +36,24 @@ class CubixBuilder<TCubix extends Cubix> extends StatefulWidget {
 class CubixBuilderState<TCubix extends Cubix>
     extends State<CubixBuilder<TCubix>> {
   TCubix? cubix;
+  final _defaultFamily = Object();
+
+  bool get transient => widget.transient || widget.family is Cubiw;
 
   @override
   Widget build(BuildContext context) {
     final resolver = RepositoryProvider.of<DependencyResolver>(context);
+    var family = widget.family;
+    if (family is Cubiw) {
+      family = family.family ?? _defaultFamily;
+    }
     final nextCubix = resolver.resolve(
       widget.create,
-      family: widget.family,
+      family: family,
     );
 
-    if (cubix != nextCubix && widget.transient) {
-      cubix?.dispose();
+    if (cubix != nextCubix && transient) {
+      cubix?.remove();
     }
 
     cubix = nextCubix;
@@ -96,7 +68,7 @@ class CubixBuilderState<TCubix extends Cubix>
   @override
   void dispose() {
     super.dispose();
-    if (widget.transient && cubix != null) {
+    if (transient) {
       cubix?.remove();
     }
   }
